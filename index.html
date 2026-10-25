@@ -20,7 +20,6 @@
           <div id="stage">
             <video id="video" playsinline muted autoplay></video>
             <canvas id="overlay"></canvas>
-            <canvas id="guide"></canvas>
           </div>
           <div id="startPanel">
             <button id="startBtn" class="primary">カメラを開始</button>
@@ -39,37 +38,13 @@
             <select id="viewLive"><option value="side">真横から</option><option value="rear">真後ろから</option></select>
           </label>
           <p id="viewNote" class="muted"></p>
-          <label class="field">利用場所
-            <select id="modeLive"><option value="home">自宅(ひとりで練習)</option><option value="alley">ボウリング場(レーン前の人だけ)</option></select>
-          </label>
-          <p id="modeNote" class="muted"></p>
           <label class="field">お手本
             <select id="presetLive"><option value="">なし</option></select>
           </label>
           <label class="field">検知の感度
             <select id="sens"><option value="strict">厳しい(誤検知しにくい)</option><option value="normal">標準</option><option value="loose">ゆるい(検知しやすい)</option></select>
           </label>
-          <h3>キャリブレーション(後方撮影)</h3>
-          <p id="calibInfo" class="muted"></p>
-          <div class="actions">
-            <button id="calibStand" class="small">① 立ち位置を登録</button>
-            <button id="calibWalk" class="small">② 試し歩きで調整</button>
-            <button id="calibClear" class="small danger">消去</button>
-          </div>
-          <p id="calibStatus"></p>
           <details id="diag"><summary>診断(検知されないとき)</summary><pre id="diagText" class="muted"></pre></details>
-          <h3>設置ガイド</h3>
-          <label class="field check"><input type="checkbox" id="guideOn"> 補助線と水平器を表示</label>
-          <div id="guideCtl" hidden>
-            <div id="laneCtl">
-              <label class="field">レーン幅(画面下端) <input type="range" id="guideW" min="10" max="48" value="30"></label>
-              <label class="field">レーンが交わる高さ <input type="range" id="guideVp" min="15" max="65" value="40"></label>
-            </div>
-            <div class="actions"><button id="levelBtn" class="small">傾きセンサーを有効にする</button>
-              <button id="levelFlip" class="small">傾きの向きを反転</button></div>
-            <p id="levelInfo" class="muted"></p>
-            <p class="muted">緑の線が白い基準線と重なれば水平です。線の向きが逆に動く場合は「向きを反転」を押してください。</p>
-          </div>
           <p id="focusLine" class="muted"></p>
           <h3>リアルタイム指標</h3>
           <div id="liveMetrics" class="muted">人物を検出中…</div>
@@ -125,18 +100,7 @@
       <label class="field">撮影位置
         <select id="view"><option value="side">真横から</option><option value="rear">真後ろから</option></select>
       </label>
-      <label class="field">利用場所
-        <select id="mode"><option value="home">自宅(ひとりで練習)</option><option value="alley">ボウリング場(レーン前の人だけ)</option></select>
-      </label>
       <label class="field check"><input type="checkbox" id="voice"> 音声でフィードバック</label>
-      <h3>判定基準の調整</h3>
-      <p class="muted">肉眼の判断と、アプリの判定が合わないときに使います。①投球の結果画面(または履歴の詳細)で、重点項目の「悪い / 問題なし」を肉眼で判断して押す → ②数投ぶんたまったら、下のボタンで境目を提案・適用します。数値を直接変えることもできます。</p>
-      <div id="suggestBox"></div>
-      <p id="rangeMsg" class="muted pre"></p>
-      <details><summary>各指標の「良い範囲」を直接変更(空欄は初期値)</summary>
-        <div id="rangeBox"></div>
-        <div class="actions"><button id="rangeReset" class="small danger">すべて初期値に戻す</button></div>
-      </details>
       <h3>直したい点(重点項目)</h3>
       <div id="focusBox"></div>
       <label class="field">AIへの追加指示(自由記述)

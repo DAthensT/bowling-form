@@ -68,14 +68,10 @@ for (const [k, v] of Object.entries(EXTRA)) Object.assign(SPECS[k], v);
 
 const inRange = (v, [a, b]) => v >= a && v <= b;
 
-// ユーザーが設定した判定基準(良い範囲の上書き)。優先順位: ユーザー設定 > お手本 > 初期値
-let overrides = {};
-export function setRangeOverrides(o) { overrides = o || {}; }
-
-/** 指標の良い範囲/注意の範囲。 */
+/** 指標の良い範囲/注意の範囲。お手本があればその範囲、なければ初期値。 */
 export function effectiveRange(key, preset = null) {
   const s = SPECS[key];
-  const r = overrides[key] || (preset && preset.ranges && preset.ranges[key]);
+  const r = preset && preset.ranges && preset.ranges[key];
   return r ? { good: r.good, ok: r.ok } : { good: s.good, ok: s.ok };
 }
 

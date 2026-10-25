@@ -1,17 +1,13 @@
 import { createPoseDetector, BONES } from './pose.js';
 import { ThrowDetector } from './detector.js';
 import { ThrowRecorder } from './recorder.js';
-import { analyze, instant, summarize, setRangeOverrides, SPECS } from './analyzer.js';
-import { collectLabeled, suggestBoundary, applyBoundary, overrideFromInputs } from './tuning.js';
+import { analyze, instant, summarize } from './analyzer.js';
 import { FOCUS_OPTIONS, DEFAULT_FOCUS, focusItems, focusSummary, focusKeys } from './focus.js';
 import { streamAnalysis } from './gemini.js';
 import { putThrow, removeThrow, getThrow, allThrows, allPresets, getPreset, settings } from './store.js';
 import { initPresetsTab } from './presets-ui.js';
-import { initGuides } from './guides.js';
 import { PresenceFilter } from './presence.js';
-import { hipCenter } from './target.js';
 import { compare, selectHistory } from './trend.js';
-import { summarizeStanding, laneForPoints, deriveThresholds } from './calibration.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
@@ -41,41 +37,15 @@ let lastRecord = null;   // 撮影タブに表示中の直近の投球
 let openRecord = null;   // 履歴の詳細画面に表示中の投球
 let activePreset = null; // 使用中のお手本プリセット(現在の撮影位置と一致するもののみ)
 let presetsTab = null;
-let guides = null;
 let presence = new PresenceFilter();
 
 // ---------------------------------------------------------------- settings / tabs
 
 const hand = () => settings.get('hand', 'right');
 const view = () => (settings.get('view', 'side') === 'rear' ? 'rear' : 'side');
-const mode = () => (settings.get('mode', 'home') === 'alley' ? 'alley' : 'home');
-const MODE_NOTES = {
-  home: '他の人が写らない前提です。一番大きく映っている人を分析します。',
-  alley: '設置ガイドで合わせたレーンの範囲(暗くしていない部分)にいる人だけを分析し、範囲の外の人は無視します。台形をレーンに合わせてください。'
-};
-let lastTarget = null; // 直前まで追っていた人 {c:{x,y}, t}
-let collector = null;  // キャリブレーション中のフレーム収集 {frames, cfg, end, resolve}
 const SENS_LABEL = { strict: '厳しい', normal: '標準', loose: 'ゆるい' };
 const sens = () => (SENS_LABEL[settings.get('sens', 'normal')] ? settings.get('sens', 'normal') : 'normal');
-const calib = () => settings.get('calib', null);
-
-/** 検知器。キャリブレーション済み(後方)なら、試し歩きで決めたしきい値を使う。 */
-function makeDetector() {
-  const c = calib();
-  const cfg = { view: view() };
-  if (view() === 'rear' && c && c.startSlope) { cfg.rearStartSlope = c.startSlope; cfg.rearEndSlope = c.endSlope; }
-  return new ThrowDetector(cfg);
-}
-
-/** 人物の選び方(target.js)。ボウリング場 + 後方撮影のときだけレーン範囲に絞る。 */
-function targetConfig(t) {
-  if (mode() !== 'alley' || view() !== 'rear') return null;
-  return {
-    mode: 'alley', laneW: settings.get('guideW', 30) / 100, vpY: settings.get('guideVp', 40) / 100,
-    cx: calib() && typeof calib().cx === 'number' ? calib().cx : undefined,
-    prev: lastTarget && t - lastTarget.t < 0.5 ? lastTarget.c : null
-  };
-}
+const makeDetector = () => new ThrowDetector({ view: view() });
 const VIEW_TIPS = {
   side: 'アプローチに対して真横、全身が映る位置に三脚で固定。前傾・膝・肘・スイングの高さを分析します。',
   rear: 'レーンの延長線上、ボウラーの真後ろに三脚で固定(足元から頭まで、助走の最後まで映る距離)。肩の傾き・腕の通り道・助走のまっすぐさを分析します。'
@@ -95,8 +65,6 @@ function initSettings() {
   $('handLive').value = hand();
   $('handLive').addEventListener('change', () => { settings.set('hand', $('handLive').value); onSettingsChanged(); });
   bind('view', 'view', 'side');
-  bind('mode', 'mode', 'home');
-  $('modeLive').addEventListener('change', () => { settings.set('mode', $('modeLive').value); onSettingsChanged(); });
   $('viewLive').addEventListener('change', () => { settings.set('view', $('viewLive').value); onSettingsChanged(); });
   onSettingsChanged();
 }
@@ -124,19 +92,12 @@ function onSettingsChanged() {
   $('handLive').value = hand();
   $('view').value = view();
   $('viewLive').value = view();
-  $('mode').value = mode();
-  $('modeLive').value = mode();
-  $('modeNote').textContent = MODE_NOTES[mode()] +
-    (mode() === 'alley' && view() === 'side' ? '(横から撮影のときは、レーン前の人への絞り込みは未対応です。一番大きく映る人を分析します)' : '');
-  if (pose) { pose.setMaxPeople(mode() === 'alley' ? 4 : 2); pose.setSensitivity(sens()); }
+  if (pose) pose.setSensitivity(sens());
   $('sens').value = sens();
-  renderCalibInfo();
-  lastTarget = null;
   presence.reset();
   $('viewNote').textContent = VIEW_TIPS[view()];
   setVoiceEnabled(settings.get('voice', true));
   loadActivePreset();
-  if (guides) guides.redraw();
   // 撮影位置が変わったら、待機中に限り検知器を作り直す(検知方式が違うため)
   if (detector.view !== view() && state !== 'recording' && state !== 'analyzing') detector = makeDetector();
 }
@@ -177,9 +138,6 @@ function layoutStage() {
   stage.style.aspectRatio = 'auto';
   overlay.width = vw;
   overlay.height = vh;
-  $('guide').width = vw;
-  $('guide').height = vh;
-  if (guides) guides.redraw();
 }
 window.addEventListener('resize', layoutStage);
 window.addEventListener('orientationchange', () => setTimeout(layoutStage, 300));
@@ -190,7 +148,6 @@ async function startCamera() {
   try {
     setMessage('姿勢推定モデルを読み込み中…');
     if (!pose) pose = await createPoseDetector();
-    pose.setMaxPeople(mode() === 'alley' ? 4 : 2);
     pose.setSensitivity(sens());
     setMessage('カメラを起動中…');
     stream = await navigator.mediaDevices.getUserMedia({
@@ -226,7 +183,6 @@ async function startCamera() {
 
 function stopCamera() {
   running = false;
-  if (collector) { collector.resolve([]); collector = null; }
   recorder?.stop();
   recorder = null;
   stream?.getTracks().forEach((t) => t.stop());
@@ -255,22 +211,7 @@ function loop() {
   const nowMs = performance.now();
   let frame = null;
   const t = nowMs / 1000;
-  try { frame = pose.detect(video, nowMs, collector ? collector.cfg : targetConfig(t)); } catch (e) { console.warn('pose error', e); }
-  if (collector) {
-    // キャリブレーション中は、通常の検知・録画を止めて、フレームを集める
-    collector.frames.push({ t, raw: frame });
-    drawPose(frame, true);
-    if (nowMs >= collector.end) { const c = collector; collector = null; c.resolve(c.frames); }
-    schedule(loop);
-    return;
-  }
-  if (calibBusy) {
-    // 調整の準備中(カウントダウンなど)は、通常の検知・録画を始めない
-    drawPose(frame, true);
-    schedule(loop);
-    return;
-  }
-  if (frame) lastTarget = { c: hipCenter(frame.j), t };
+  try { frame = pose.detect(video, nowMs); } catch (e) { console.warn('pose error', e); }
   onFrame(frame, t);
   schedule(loop);
 }
@@ -330,7 +271,7 @@ function maybeSnapshot(t) {
   while (snaps.length && snaps[0].t < t - 25) snaps.shift();
 }
 
-// ---------------------------------------------------------------- diagnostics / calibration
+// ---------------------------------------------------------------- diagnostics
 
 /** 「なぜ検知されないか」を画面で確認できるようにする(診断表示) */
 function renderDiag(raw) {
@@ -341,130 +282,14 @@ function renderDiag(raw) {
   if (d.implausible) {
     lines.push(`  人物として不自然: ${d.implausible} (${Object.entries(d.reasons).map(([k, v]) => `${k}×${v}`).join(', ')})`);
   }
-  if (mode() === 'alley' && view() === 'rear') lines.push(`  レーン範囲 内: ${d.inside} / 外: ${d.candidates - d.inside}`);
   lines.push(`分析の対象: ${d.picked ? 'あり' : 'なし'} / 人物の確認: ${presence.stable ? '安定' : `確認中(${presence.times.length}/${presence.minFrames})`}`);
   const th = detector.view === 'rear' ? detector.config.rearStartSlope : detector.config.startSpeed;
   lines.push(`動き量: ${detector.signal.toFixed(3)} / 開始しきい値 ${th.toFixed(3)}${detector.isActive ? ' (投球中)' : ''}`);
-  lines.push(`状態: ${$('stateLabel').textContent} / 感度: ${SENS_LABEL[sens()]} / キャリブレーション: ${calib() ? '登録済み' : '未登録'}`);
-  lines.push(`利用場所: ${mode() === 'alley' ? 'ボウリング場' : '自宅'} / 撮影位置: ${view() === 'rear' ? '後方' : '横'}`);
+  lines.push(`状態: ${$('stateLabel').textContent} / 感度: ${SENS_LABEL[sens()]}`);
+  lines.push(`撮影位置: ${view() === 'rear' ? '後方' : '横'}`);
   $('diagText').textContent = lines.join(String.fromCharCode(10));
 }
 
-function renderCalibInfo() {
-  const c = calib();
-  $('calibInfo').textContent = !c
-    ? '未登録。ボウリング場で、①立ち位置 → ②試し歩き の順に行うと、レーン範囲・検知の感度・しきい値を自動で合わせます。'
-    : `登録済み: レーン中心 ${Math.round((c.cx ?? 0.5) * 100)}% / 幅 ${Math.round((c.laneW ?? 0.3) * 100)}% / 感度 ${SENS_LABEL[c.sens] || '標準'}` +
-      (c.startSlope ? ` / 検知しきい値 ${c.startSlope.toFixed(3)}(終了 ${c.endSlope.toFixed(3)})` : ' / 試し歩き未実施');
-}
-
-const CAL_WIDE = (cx) => ({ mode: 'alley', cx, laneW: 0.45, vpY: 0.2, minHalf: 0.3, prev: null });
-let calibBusy = false;
-const say = (t) => { $('calibStatus').textContent = t; };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const collect = (ms, cfg) => new Promise((resolve) => { collector = { frames: [], cfg, end: performance.now() + ms, resolve }; });
-
-function setCalibButtons(enabled) {
-  ['calibStand', 'calibWalk', 'calibClear'].forEach((id) => { $(id).disabled = !enabled; });
-}
-
-function saveCalib(partial) {
-  const c = { ...(calib() || {}), ...partial };
-  settings.set('calib', c);
-  // 設置ガイド(台形)とレーン範囲も、登録した値に合わせる
-  settings.set('guideW', Math.min(48, Math.max(10, Math.round(c.laneW * 100))));
-  settings.set('guideVp', Math.round(c.vpY * 100));
-  if (guides) guides.redraw();
-  renderCalibInfo();
-}
-
-async function guardCalib() {
-  if (!running) { say('先に「カメラを開始」を押してください'); return false; }
-  if (view() !== 'rear') { say('キャリブレーションは後方撮影で使います。撮影位置を「真後ろから」にしてください'); return false; }
-  if (calibBusy) return false;
-  return true;
-}
-
-async function calibStand() {
-  if (!(await guardCalib())) return;
-  calibBusy = true;
-  setCalibButtons(false);
-  try {
-    say('投球者はスタート位置に立って、そのまま静止してください…');
-    await sleep(1500);
-    // 感度は、人物をきちんと検出できる一番厳しい段階を自動で選ぶ(厳しいほど誤検知が少ない)
-    let chosen = null;
-    let best = { level: null, rate: 0, frames: [] };
-    for (const level of ['strict', 'normal', 'loose']) {
-      pose.setSensitivity(level);
-      say(`人物を確認中…(感度: ${SENS_LABEL[level]})`);
-      const got = await collect(1500, CAL_WIDE(0.5));
-      const ok = got.filter((g) => g.raw).map((g) => g.raw);
-      const rate = ok.length / Math.max(got.length, 1);
-      if (rate > best.rate) best = { level, rate, frames: ok };
-      if (rate >= 0.8) { chosen = level; break; }
-    }
-    if (!chosen && best.rate >= 0.3) chosen = best.level;
-    if (!chosen) {
-      say('人物を検出できませんでした。画面の中央付近に全身が映っているか、明るさ(暗すぎないか)、遠すぎないかを確認してください。診断欄に原因が出ます。');
-      return;
-    }
-    settings.set('sens', chosen);
-    const stand = summarizeStanding(best.frames);
-    if (!stand) { say('検出できたフレームが少なすぎます。もう一度、静止して試してください'); return; }
-    const vpY = settings.get('guideVp', 40) / 100;
-    const laneW = laneForPoints([{ x: stand.cx, y: stand.cy, need: Math.max(stand.width * 2.5, 0.12) }], { cx: stand.cx, vpY });
-    saveCalib({ cx: stand.cx, cy: stand.cy, torso: stand.torso, laneW, vpY, sens: chosen, standAt: Date.now() });
-    say(`立ち位置を登録しました(感度: ${SENS_LABEL[chosen]}、検出率 ${Math.round(best.rate * 100)}%)。続けて「② 試し歩きで調整」を行ってください。`);
-  } finally {
-    calibBusy = false;
-    setCalibButtons(true);
-    onSettingsChanged();
-    refreshDetector();
-  }
-}
-
-async function calibWalk() {
-  if (!(await guardCalib())) return;
-  calibBusy = true;
-  setCalibButtons(false);
-  try {
-    for (let n = 3; n > 0; n--) { say(`${n}秒後に開始します。投球者はスタート位置から、普段どおりアプローチ(スイングまで)してください`); await sleep(1000); }
-    say('測定中…(約9秒)');
-    const c0 = calib() || {};
-    const got = await collect(9000, CAL_WIDE(typeof c0.cx === 'number' ? c0.cx : 0.5));
-    const th = deriveThresholds(got.filter((g) => g.raw).map((g) => g.raw));
-    if (!th.ok) { say(th.reason); return; }
-    const vpY = typeof c0.vpY === 'number' ? c0.vpY : settings.get('guideVp', 40) / 100;
-    const cx = typeof c0.cx === 'number' ? c0.cx : 0.5;
-    const pts = th.path.map((p) => ({ x: p.x, y: p.y, need: 0.12 }));
-    if (typeof c0.cy === 'number') pts.push({ x: cx, y: c0.cy, need: 0.12 });
-    const laneW = Math.max(laneForPoints(pts, { cx, vpY }), c0.laneW || 0);
-    saveCalib({ cx, laneW, vpY, startSlope: th.startSlope, endSlope: th.endSlope, peak: th.peak, walkAt: Date.now() });
-    say(`検知しきい値を調整しました(遠ざかる速さのピーク ${th.peak.toFixed(2)} → 開始 ${th.startSlope.toFixed(3)} / 終了 ${th.endSlope.toFixed(3)})。レーン範囲も歩いた軌跡が入るよう調整済みです。`);
-  } finally {
-    calibBusy = false;
-    setCalibButtons(true);
-    onSettingsChanged();
-    refreshDetector();
-  }
-}
-
-/** 保存したキャリブレーションを検知器に反映する(投球中・解析中は変えない) */
-function refreshDetector() {
-  if (state !== 'recording' && state !== 'analyzing') detector = makeDetector();
-}
-
-$('calibStand').addEventListener('click', calibStand);
-$('calibWalk').addEventListener('click', calibWalk);
-$('calibClear').addEventListener('click', () => {
-  if (!confirm('キャリブレーションを消去しますか？(検知しきい値と登録した中心位置を初期値に戻します)')) return;
-  settings.set('calib', null);
-  if (guides) guides.redraw();
-  say('消去しました');
-  onSettingsChanged();
-  refreshDetector();
-});
 $('sens').addEventListener('change', () => { settings.set('sens', $('sens').value); onSettingsChanged(); });
 
 // ---------------------------------------------------------------- throw lifecycle
@@ -607,7 +432,7 @@ function metricRow(m) {
   return `<div class="row"><span class="dot s-${m.status}"></span>${esc(m.title)}<b>${esc(m.display)}</b>${target}</div>`;
 }
 
-function focusHtml(items, rec) {
+function focusHtml(items) {
   if (!items || !items.length) return '';
   const rows = items.map((i) => {
     const detail = i.unavailable
@@ -615,15 +440,7 @@ function focusHtml(items, rec) {
       : i.metrics.map((m) => `<div class="row"><span class="dot s-${m.status}"></span>${esc(m.title)}<b>${esc(m.display)}</b>` +
         (m.range ? `<small>良い範囲 ${esc(m.range)}</small>` : '') + '</div>' +
         (m.advice ? `<p class="advice">${esc(m.advice)}</p>` : '')).join('');
-    // 肉眼で判断したラベル(判定基準の調整に使う)。「背負い」など、片側だけ問題になる項目のみ
-    const opt = FOCUS_OPTIONS.find((o) => o.id === i.id);
-    const labelable = rec && opt && !i.unavailable && opt.bind.some((b) => b.only);
-    const cur = rec && rec.labels ? rec.labels[i.id] : null;
-    const lbl = labelable
-      ? `<div class="lbl">肉眼で判断: <button class="small ${cur === 'bad' ? 'on' : ''}" data-lbl="bad" data-item="${i.id}" data-rec="${rec.id}">悪い</button>` +
-        `<button class="small ${cur === 'ok' ? 'on' : ''}" data-lbl="ok" data-item="${i.id}" data-rec="${rec.id}">問題なし</button></div>`
-      : '';
-    return `<div class="focus-item"><b>${esc(i.label)}</b>${detail}${lbl}</div>`;
+    return `<div class="focus-item"><b>${esc(i.label)}</b>${detail}</div>`;
   }).join('');
   return `<div class="focus"><p class="muted">重点項目</p>${rows}</div>`;
 }
@@ -631,7 +448,7 @@ function focusHtml(items, rec) {
 /** 重点項目があるときは、その詳細と「それ以外の講評」を分けて見せる */
 function summaryHtml(r) {
   if (r.focusItems && r.focusItems.length) {
-    return focusHtml(r.focusItems, r) + (r.generalSummary ? `<p>${esc(r.generalSummary)}</p>` : '');
+    return focusHtml(r.focusItems) + (r.generalSummary ? `<p>${esc(r.generalSummary)}</p>` : '');
   }
   return `<p>${esc(r.summary)}</p>`;
 }
@@ -784,79 +601,5 @@ $('delBtn').addEventListener('click', async () => {
 
 $('presetLive').addEventListener('change', () => { settings.set('presetId', $('presetLive').value); loadActivePreset(); presetsTab.render(); });
 presetsTab = initPresetsTab({ onChanged: loadActivePreset });
-guides = initGuides({ canvas: $('guide'), getView: view, getMode: mode });
-// ---------------------------------------------------------------- 判定基準の調整(肉眼ラベル / 手動)
-
-// 結果画面の「悪い / 問題なし」ボタン(肉眼の判断を記録する)
-document.addEventListener('click', async (ev) => {
-  const b = ev.target.closest && ev.target.closest('[data-lbl]');
-  if (!b) return;
-  const id = b.dataset.rec;
-  const rec = lastRecord && lastRecord.id === id ? lastRecord : (openRecord && openRecord.id === id ? openRecord : await getThrow(id));
-  if (!rec) return;
-  const labels = { ...(rec.labels || {}) };
-  if (labels[b.dataset.item] === b.dataset.lbl) delete labels[b.dataset.item]; // もう一度押すと取り消し
-  else labels[b.dataset.item] = b.dataset.lbl;
-  rec.labels = labels;
-  await putThrow(rec);
-  refreshViews(rec);
-});
-
-function initRangeUi() {
-  const ov = () => settings.get('rangeOverrides', {});
-  const save = (o) => { settings.set('rangeOverrides', o); setRangeOverrides(o); };
-  setRangeOverrides(ov());
-
-  const build = () => {
-    $('rangeBox').innerHTML = Object.keys(SPECS).map((k) => {
-      const s = SPECS[k], cur = ov()[k] && ov()[k].good;
-      const show = (v) => (Math.abs(v) >= 1e8 ? '' : v);
-      return `<div class="rr"><span>${esc(s.title)}</span><input type="number" step="any" data-k="${k}" placeholder="${show(s.good[0])}" value="${cur ? show(cur[0]) : ''}">` +
-        `<span>〜</span><input type="number" step="any" data-k="${k}" placeholder="${show(s.good[1])}" value="${cur ? show(cur[1]) : ''}"></div>`;
-    }).join('');
-    $('rangeBox').querySelectorAll('input').forEach((el) => el.addEventListener('change', () => {
-      const k = el.dataset.k;
-      const [lo, hi] = [...$('rangeBox').querySelectorAll(`input[data-k="${k}"]`)].map((x) => (x.value === '' ? null : Number(x.value)));
-      const next = { ...ov() };
-      const o = overrideFromInputs(k, lo, hi);
-      if (o) next[k] = o; else delete next[k];
-      save(next);
-    }));
-  };
-  build();
-  $('rangeReset').addEventListener('click', () => { if (confirm('すべての判定基準を初期値に戻しますか？')) { save({}); build(); $('rangeMsg').textContent = '初期値に戻しました'; } });
-
-  const opts = FOCUS_OPTIONS.filter((o) => o.bind.some((b) => b.only));
-  $('suggestBox').innerHTML = opts.map((o) =>
-    `<div class="actions"><button class="small" data-sug="${o.id}">「${esc(o.label)}」の基準を、肉眼ラベルから提案</button></div>`).join('');
-  $('suggestBox').querySelectorAll('[data-sug]').forEach((btn) => btn.addEventListener('click', async () => {
-    const opt = opts.find((o) => o.id === btn.dataset.sug);
-    const records = await allThrows();
-    const fmt = (arr) => arr.map((v) => v.toFixed(2)).join(', ');
-    const lines = [];
-    const proposals = [];
-    for (const b of opt.bind.filter((x) => x.only)) {
-      const c = collectLabeled(records, opt.id, b.key);
-      const sg = suggestBoundary({ key: b.key, only: b.only, bad: c.bad, ok: c.ok });
-      if (!sg.ok) continue;
-      proposals.push({ key: b.key, only: b.only, boundary: sg.boundary });
-      lines.push(`${SPECS[b.key].title}: 悪い ${c.bad.length}件 [${fmt(c.bad)}] / 問題なし ${c.ok.length}件 [${fmt(c.ok)}] → 境目 ${sg.boundary.toFixed(2)}` +
-        (sg.overlap ? '(値が重なっています。ラベルが違うか、この指標では区別できない可能性があります)' : '') +
-        (sg.onlyOneKind ? '(片方のラベルだけなので目安です)' : ''));
-    }
-    if (!proposals.length) { $('rangeMsg').textContent = 'ラベルがありません。投球の結果画面(または履歴の詳細)の重点項目にある「悪い / 問題なし」ボタンで、肉眼の判断を記録してください。'; return; }
-    const text = lines.join(String.fromCharCode(10));
-    $('rangeMsg').textContent = text;
-    if (confirm(text + String.fromCharCode(10, 10) + 'この境目を判定基準として適用しますか？')) {
-      const next = { ...ov() };
-      for (const p of proposals) next[p.key] = applyBoundary(p.key, p.only, p.boundary);
-      save(next);
-      build();
-      $('rangeMsg').textContent = text + String.fromCharCode(10) + '→ 適用しました(以降の投球から反映されます)';
-    }
-  }));
-}
-
-initRangeUi();
 initFocusUi();
 initSettings();
