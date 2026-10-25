@@ -450,6 +450,15 @@ function analyzeBody({ frames, hand, throwStart, view, preset }) {
   };
 }
 
+/**
+ * 記録された解析結果の測定方式: '3d' | '2d' | 'legacy'。
+ * legacy = 測定方式を記録する前の古い記録(当時は 2D だけ)。比較などでは 2D として扱う。
+ */
+export function measurementMethod(report) {
+  if (!report || !report.method) return 'legacy';
+  return report.method === '3d' ? '3d' : '2d';
+}
+
 /** お手本は、同じ測定方式で作ったものだけ使う(2D と 3D では値の意味が少し違う)。方式不明の古いものは 2D 扱い。 */
 function presetFor(method, preset) {
   if (!preset) return { preset: null, skipped: false };

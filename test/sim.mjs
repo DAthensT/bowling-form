@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ThrowDetector } from '../js/detector.js';
 import { analyze } from '../js/analyzer.js';
 import { compare, selectHistory, deviation } from '../js/trend.js';
-import { metric, summarize } from '../js/analyzer.js';
+import { metric, summarize, measurementMethod } from '../js/analyzer.js';
 import { whyNotPlausible } from '../js/presence.js';
 import { focusItems, focusSummary, focusKeys, DEFAULT_FOCUS, FOCUS_OPTIONS } from '../js/focus.js';
 import { PresenceFilter, isPlausiblePerson } from '../js/presence.js';
@@ -576,6 +576,18 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   const mkRec = (method, date) => ({ date, view: 'rear', hand: 'right', report: { isValidThrow: true, method, metrics: [] } });
   const sel = selectHistory([mkRec('3d', 1), mkRec('2d', 2), { date: 3, view: 'rear', hand: 'right', report: { isValidThrow: true, metrics: [] } }], { view: 'rear', hand: 'right', method: '3d' });
   assert.equal(sel.length, 1, 'only the same method is compared (no method = 2d)');
+}
+
+// 記録の測定方式の表示: 方式を記録する前の古い記録は 'legacy'(2D 扱い)
+{
+  assert.equal(measurementMethod({ method: '3d' }), '3d');
+  assert.equal(measurementMethod({ method: '2d' }), '2d');
+  assert.equal(measurementMethod({ isValidThrow: true, metrics: [] }), 'legacy', 'no method recorded = legacy');
+  assert.equal(measurementMethod(null), 'legacy');
+  // legacy は比較・お手本の判定では 2D として扱われる(selectHistory の method:'2d' に含まれる)
+  const rec = { date: 1, view: 'rear', hand: 'right', report: { isValidThrow: true, metrics: [] } };
+  assert.equal(selectHistory([rec], { view: 'rear', hand: 'right', method: '2d' }).length, 1);
+  assert.equal(selectHistory([rec], { view: 'rear', hand: 'right', method: '3d' }).length, 0);
 }
 
 console.log('OK');

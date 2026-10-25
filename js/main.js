@@ -1,7 +1,7 @@
 import { createPoseDetector, BONES } from './pose.js';
 import { ThrowDetector } from './detector.js';
 import { ThrowRecorder } from './recorder.js';
-import { analyze, instant, summarize } from './analyzer.js';
+import { analyze, instant, summarize, measurementMethod } from './analyzer.js';
 import { FOCUS_OPTIONS, DEFAULT_FOCUS, focusItems, focusSummary, focusKeys } from './focus.js';
 import { streamAnalysis } from './gemini.js';
 import { putThrow, removeThrow, getThrow, allThrows, allPresets, getPreset, settings } from './store.js';
@@ -480,12 +480,16 @@ function refreshViews(record) {
   if (openRecord && openRecord.id === record.id) { renderDetailAi(); $('detailSummary').innerHTML = summaryHtml(record); }
 }
 
+const METHOD_LABEL = { '3d': '3D(体の向き基準)', '2d': '2D(画像上)', legacy: '2D(旧記録)' };
+const METHOD_TAG = { '3d': '3D', '2d': '2D', legacy: '2D旧' };
+
 async function renderHistory() {
   const list = $('historyList');
   const items = await allThrows();
   if (!items.length) { list.innerHTML = '<p class="muted">まだ投球がありません</p>'; return; }
   list.innerHTML = items.map((r) =>
-    `<div class="item" data-id="${r.id}"><b>${new Date(r.date).toLocaleString('ja-JP')}${r.view === 'rear' ? '(後方)' : ''}${r.aiStatus === 'done' ? ' ✨' : ''}</b>` +
+    `<div class="item" data-id="${r.id}"><b>${new Date(r.date).toLocaleString('ja-JP')}${r.view === 'rear' ? '(後方)' : ''}${r.aiStatus === 'done' ? ' ✨' : ''}` +
+    `<span class="tag ${measurementMethod(r.report) === '3d' ? 'm3d' : ''}">${METHOD_TAG[measurementMethod(r.report)]}</span></b>` +
     `<span>${esc(r.summary)}</span></div>`).join('');
   list.querySelectorAll('.item').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.id)));
 }
@@ -544,11 +548,12 @@ async function openDetail(id) {
   $('detailCmp').innerHTML = comparisonHtml(r.comparison) || '<p class="muted">比較できる過去の投球がありませんでした。</p>';
   renderDetailAi();
 
+  // 測定方式は、診断情報(diag)のない古い記録でも必ず出す
   const d = r.report && r.report.diag;
-  $('detailDiag').textContent = d
-    ? `測定方式: ${r.report.method === '3d' ? '3D(体の向き基準)' : '2D(画像上)'} / 解析に使えたフレーム ${d.samples}(補間 ${d.interpolated}) / リリース後 ${d.afterRelease}フレーム(${d.afterSpan.toFixed(2)}秒) → フォロースルー: ` +
+  $('detailDiag').textContent = `測定方式: ${METHOD_LABEL[measurementMethod(r.report)]}` + (d
+    ? ` / 解析に使えたフレーム ${d.samples}(補間 ${d.interpolated}) / リリース後 ${d.afterRelease}フレーム(${d.afterSpan.toFixed(2)}秒) → フォロースルー: ` +
       (d.followMeasured ? '測定できました' : '測れませんでした(リリース後の腕を十分に検出できていません)')
-    : '';
+    : '(この記録には解析の詳細がありません)');
   detailUrl = URL.createObjectURL(r.video);
   const v = $('detailVideo');
   v.addEventListener('loadedmetadata', () => { $('detailOverlay').width = v.videoWidth; $('detailOverlay').height = v.videoHeight; }, { once: true });
