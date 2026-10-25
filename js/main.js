@@ -323,12 +323,12 @@ async function finishThrow(endAt) {
     if (!rec) { setState('idle', '録画を保存できませんでした'); return; }
     const frames = history.filter((f) => f.t >= rec.videoStart && f.t <= endAt);
     const report = analyze({ frames, hand: hand(), throwStart: detectedStart, view: detector.view, preset: activePreset });
-    report.presetName = activePreset ? activePreset.name : '';
+    report.presetName = activePreset && !report.presetSkipped ? activePreset.name : '';
     if (!report.isValidThrow) { setState('idle', '投球として認識できず破棄: ' + report.summary); return; }
 
     // 直近の投球(同じ撮影位置・利き手)との比較: 改善/悪化と推移の傾向
-    const past = selectHistory(await allThrows(), { view: report.view, hand: hand() });
-    const comparison = compare(report, past, activePreset);
+    const past = selectHistory(await allThrows(), { view: report.view, hand: hand(), method: report.method });
+    const comparison = compare(report, past, report.presetSkipped ? null : activePreset);
 
     // 直したい点(重点項目): 選んだ項目を最優先で判定し、全体の講評からは重複を除く
     const fItems = focusItems(report, settings.get('focusIds', DEFAULT_FOCUS));
@@ -447,10 +447,11 @@ function focusHtml(items) {
 
 /** 重点項目があるときは、その詳細と「それ以外の講評」を分けて見せる */
 function summaryHtml(r) {
+  const notes = (r.report && r.report.notes ? r.report.notes : []).map((n) => `<p class="muted">※ ${esc(n)}</p>`).join('');
   if (r.focusItems && r.focusItems.length) {
-    return focusHtml(r.focusItems) + (r.generalSummary ? `<p>${esc(r.generalSummary)}</p>` : '');
+    return focusHtml(r.focusItems) + (r.generalSummary ? `<p>${esc(r.generalSummary)}</p>` : '') + notes;
   }
-  return `<p>${esc(r.summary)}</p>`;
+  return `<p>${esc(r.summary)}</p>` + notes;
 }
 
 const VERDICT = { better: ['cmp-better', '▲ 改善'], worse: ['cmp-worse', '▼ 悪化'], same: ['cmp-same', '＝ 変化なし'] };
@@ -545,7 +546,7 @@ async function openDetail(id) {
 
   const d = r.report && r.report.diag;
   $('detailDiag').textContent = d
-    ? `解析に使えたフレーム ${d.samples}(補間 ${d.interpolated}) / リリース後 ${d.afterRelease}フレーム(${d.afterSpan.toFixed(2)}秒) → フォロースルー: ` +
+    ? `測定方式: ${r.report.method === '3d' ? '3D(体の向き基準)' : '2D(画像上)'} / 解析に使えたフレーム ${d.samples}(補間 ${d.interpolated}) / リリース後 ${d.afterRelease}フレーム(${d.afterSpan.toFixed(2)}秒) → フォロースルー: ` +
       (d.followMeasured ? '測定できました' : '測れませんでした(リリース後の腕を十分に検出できていません)')
     : '';
   detailUrl = URL.createObjectURL(r.video);

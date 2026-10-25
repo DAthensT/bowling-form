@@ -31,7 +31,7 @@ export function buildPreset({ name, source = '', view, hand, reports }) {
   }
   return {
     id: (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2),
-    name, source, view, hand, createdAt: Date.now(), throwsCount: reports.length, stats, ranges
+    name, source, view, hand, method: (reports[0] && reports[0].method) || '2d', createdAt: Date.now(), throwsCount: reports.length, stats, ranges
   };
 }
 

@@ -73,13 +73,19 @@ export async function createPoseDetector() {
       const result = landmarker.detectForVideo(video, nowMs);
       const d = { people: 0, visFail: 0, implausible: 0, reasons: {}, candidates: 0, picked: false };
       const candidates = [];
-      for (const lm of result.landmarks || []) {
+      const worlds = result.worldLandmarks || [];
+      for (const [idx, lm] of (result.landmarks || []).entries()) {
         d.people++;
         const j = {};
+        const w = {}; // 3D(メートル、原点は腰の中心): 体の向きを基準にした測定に使う
+        const wl = worlds[idx];
         for (const [name, i] of Object.entries(INDEX)) {
           const p = lm[i];
           const min = ARM_JOINTS.has(name) ? ARM_VIS_MIN : Math.max(0.3, visMin - 0.15);
-          if (p && (p.visibility === undefined || p.visibility >= min)) j[name] = { x: p.x, y: p.y };
+          if (p && (p.visibility === undefined || p.visibility >= min)) {
+            j[name] = { x: p.x, y: p.y };
+            if (wl && wl[i]) w[name] = { x: wl[i].x, y: wl[i].y, z: wl[i].z };
+          }
         }
         if (j.leftShoulder && j.rightShoulder) {
           j.neck = { x: (j.leftShoulder.x + j.rightShoulder.x) / 2, y: (j.leftShoulder.y + j.rightShoulder.y) / 2 };
@@ -88,7 +94,7 @@ export async function createPoseDetector() {
         if (![11, 12, 23, 24].every(i => lm[i] && (lm[i].visibility === undefined || lm[i].visibility >= visMin))) { d.visFail++; continue; }
         const why = whyNotPlausible(j);
         if (why) { d.implausible++; d.reasons[why] = (d.reasons[why] || 0) + 1; continue; }
-        candidates.push({ t: nowMs / 1000, j });
+        candidates.push({ t: nowMs / 1000, j, ...(Object.keys(w).length ? { w } : {}) });
       }
       const best = pickLargest(candidates);
       d.candidates = candidates.length;

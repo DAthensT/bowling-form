@@ -7,6 +7,7 @@ import { metric, summarize } from '../js/analyzer.js';
 import { whyNotPlausible } from '../js/presence.js';
 import { focusItems, focusSummary, focusKeys, DEFAULT_FOCUS, FOCUS_OPTIONS } from '../js/focus.js';
 import { PresenceFilter, isPlausiblePerson } from '../js/presence.js';
+import { hipAxis, smoothAxes, toBody, angle3 } from '../js/body3d.js';
 import { buildPreset, describePreset, validatePreset } from '../js/preset-model.js';
 
 const TORSO = 0.2;
@@ -417,6 +418,164 @@ function sideReport(t0, backY, followY = -0.3) {
   const rr = runRear(rear);
   const rrep = analyze({ frames: rear.filter(f => f.t >= rr.started - 1 && f.t <= rr.ended + 1.5), hand: 'right', throwStart: rr.started, view: 'rear' });
   assert.ok(rrep.isValidThrow && rrep.diag.followMeasured, 'rear follow-through measured');
+}
+
+// ---------------------------------------------------------------- 3D(体の向きを基準にした測定)
+
+// 体の模型(メートル)を、カメラに対して yaw だけ斜めに置いて、画像上の2D座標と3D座標の両方を作る。
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let x = Math.imul(a ^ (a >>> 15), 1 | a); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; }
+const gauss = (r) => Math.sqrt(-2 * Math.log(r() || 1e-9)) * Math.cos(2 * Math.PI * r());
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+/**
+ * view: 'rear' | 'side'。yawDeg: 体の進行方向が、カメラの基準の向き(後方=レーン方向 / 横=画面の左右)からずれている角度。
+ * armOut: 投球腕の、肩に対する「体の外側」への真の横ずれ(m)。0 = 肩の真後ろ・真下を通る。負 = 内側(背負い)。
+ */
+function make3dThrow({ t0, view, yawDeg, hand = 'right', armOut = 0, leanDeg = 25, noise2 = 0, noise3 = 0, seed = 1, withWorld = true }) {
+  const R = rng(seed), psi = (yawDeg * Math.PI) / 180, sg = hand === 'right' ? 1 : -1;
+  const F = view === 'rear' ? [Math.sin(psi), 0, Math.cos(psi)] : [Math.cos(psi), 0, Math.sin(psi)];
+  const U = [0, -1, 0];
+  const L = cross(F, U); // 体の右
+  const base = view === 'rear' ? [0, 0, 3] : [-2, 0, 4];
+  const f = 0.9; // 焦点距離(画像幅=1 に対する比)
+  const sf = 0.5 * Math.sin((leanDeg * Math.PI) / 180), su = 0.5 * Math.cos((leanDeg * Math.PI) / 180);
+  const domName = hand === 'right' ? 'right' : 'left', othName = hand === 'right' ? 'left' : 'right';
+  const ARM = 0.75;
+  const frames = [];
+  for (let i = 0; i < FPS * 6.2; i++) {
+    const s = i / FPS;
+    let walk = 0, phi;
+    if (s < 1.5) phi = 60;
+    else if (s < 3.7) {
+      const p = (s - 1.5) / 2.2;
+      walk = 4 * p * (2 - p);
+      phi = p < 0.5 ? 60 + (-105 - 60) * (p / 0.5) : p < 0.85 ? -105 + 105 * ((p - 0.5) / 0.35) : 0 + 140 * ((p - 0.85) / 0.15);
+    } else { walk = 4; phi = 140; }
+    const ph = (phi * Math.PI) / 180;
+    const domLat = sg * 0.2;
+    const wristLat = domLat + sg * armOut;
+    const body = {
+      [`${domName}Shoulder`]: [domLat, sf, su], [`${othName}Shoulder`]: [-domLat, sf, su],
+      [`${domName}Wrist`]: [wristLat, sf + ARM * Math.sin(ph), su - ARM * Math.cos(ph)],
+      [`${domName}Elbow`]: [wristLat, sf + 0.4 * Math.sin(ph), su - 0.4 * Math.cos(ph)],
+      leftHip: [-0.11, 0, 0], rightHip: [0.11, 0, 0],
+      neck: [0, sf, su], nose: [0, sf + 0.03, su + 0.22],
+      // スライド脚(投球腕と反対側)は膝を曲げて前へ(膝角度 130°)。もう片方は後ろ
+      [`${othName}Knee`]: [-sg * 0.11, 0.322, -0.27], [`${othName}Ankle`]: [-sg * 0.11, 0.322, -0.69],
+      [`${domName}Knee`]: [sg * 0.11, -0.1, -0.4], [`${domName}Ankle`]: [sg * 0.11, -0.3, -0.78]
+    };
+    const P = [base[0] + F[0] * walk, base[1], base[2] + F[2] * walk];
+    const j = {}, w = {};
+    for (const [k, [lat, fwd, up]] of Object.entries(body)) {
+      const v = [lat * L[0] + fwd * F[0] + up * U[0], lat * L[1] + fwd * F[1] + up * U[1], lat * L[2] + fwd * F[2] + up * U[2]];
+      const C = [P[0] + v[0], P[1] + v[1], P[2] + v[2]];
+      j[k] = { x: 0.5 + (f * C[0]) / C[2] + noise2 * gauss(R), y: 0.5 + (f * C[1]) / C[2] + noise2 * gauss(R) };
+      w[k] = { x: v[0] + noise3 * gauss(R), y: v[1] + noise3 * gauss(R), z: v[2] + 4 * noise3 * gauss(R) };
+    }
+    frames.push(withWorld ? { t: t0 + s, j, w } : { t: t0 + s, j });
+  }
+  return frames;
+}
+const metricVal = (rep, key) => (rep.metrics.find(m => m.key === key) || {}).value;
+const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 'right', throwStart: opts.t0 + 1.5, view: opts.view });
+
+{
+  // 体の座標系の作り方: 後方から見た体(yaw 0)では、体の右 = 画像の右、前 = カメラから遠ざかる向き
+  const fr = make3dThrow({ t0: 0, view: 'rear', yawDeg: 0 })[10];
+  const ax = hipAxis(fr.w);
+  assert.ok(Math.abs(ax.x - 1) < 1e-6 && Math.abs(ax.z) < 1e-6, 'hip axis = image right for a rear view');
+  const b = toBody(fr.w, ax);
+  assert.ok(b.rightShoulder.lat > 0.19 && b.leftShoulder.lat < -0.19 && Math.abs(b.rightShoulder.up - 0.453) < 0.01, 'body frame coordinates');
+  // 同じ体を45°斜めから見ても、体の座標は同じ(カメラの向きに依存しない)
+  const fr2 = make3dThrow({ t0: 0, view: 'rear', yawDeg: 45 })[10];
+  const b2 = toBody(fr2.w, hipAxis(fr2.w));
+  assert.ok(Math.abs(b2.rightWrist.lat - b.rightWrist.lat) < 1e-6 && Math.abs(b2.rightWrist.fwd - b.rightWrist.fwd) < 1e-6, 'body coords are camera-independent');
+  assert.equal(hipAxis({ leftHip: { x: 0, y: 0, z: 0 }, rightHip: { x: 0.01, y: 0, z: 0.01 } }), null, 'degenerate hip line');
+  assert.ok(Math.abs(angle3({ lat: 0, fwd: 0, up: 0 }, { lat: 1, fwd: 0, up: 0 }, { lat: 0, fwd: 1, up: 0 }) - 90) < 1e-9);
+}
+
+{
+  // 後方: 真っ直ぐ後ろへ引いた腕(真の横ずれ 0)は、進入角度が違っても、3D なら 0 付近に測れる。2D は角度で偏る
+  for (const yaw of [-25, -15, 0, 15, 25]) {
+    const rep = run3d({ t0: 100, view: 'rear', yawDeg: yaw });
+    assert.ok(rep.isValidThrow && rep.method === '3d', `3d used at yaw ${yaw}: ${rep.summary}`);
+    assert.ok(Math.abs(metricVal(rep, 'backswingOffset')) < 0.15, `3D backswingOffset at yaw ${yaw}: ${metricVal(rep, 'backswingOffset')}`);
+    assert.ok(Math.abs(metricVal(rep, 'releaseOffset')) < 0.15, `3D releaseOffset at yaw ${yaw}: ${metricVal(rep, 'releaseOffset')}`);
+  }
+  const strip = (fr) => fr.map(({ t, j }) => ({ t, j }));
+  const two = (yaw) => analyze({ frames: strip(make3dThrow({ t0: 100, view: 'rear', yawDeg: yaw })), hand: 'right', throwStart: 101.5, view: 'rear' });
+  const p = two(25), n = two(-25);
+  assert.equal(p.method, '2d');
+  const op = metricVal(p, 'backswingOffset'), on = metricVal(n, 'backswingOffset');
+  console.log(`rear backswingOffset (true 0): 2D yaw+25=${op.toFixed(2)} yaw-25=${on.toFixed(2)} / 3D yaw+25=${metricVal(run3d({ t0: 100, view: 'rear', yawDeg: 25 }), 'backswingOffset').toFixed(2)}`);
+  assert.ok(op < -0.2 && on > 0.2, '2D is biased by the approach angle (opposite signs)');
+}
+
+{
+  // 背負い(腕が内側 = 真の横ずれ -0.16m = 肩幅比 -0.4)は、どの角度でも 3D で検出される
+  for (const yaw of [-20, 0, 20]) {
+    const rep = run3d({ t0: 200, view: 'rear', yawDeg: yaw, armOut: -0.16 });
+    const m = rep.metrics.find(x => x.key === 'backswingOffset');
+    assert.ok(m.value < -0.3 && m.dir === 'low' && m.status !== 'good', `carry detected at yaw ${yaw}: ${m.value}`);
+  }
+  // 左投げでも同じ(左右反転)
+  for (const yaw of [-20, 20]) {
+    const straight = run3d({ t0: 300, view: 'rear', yawDeg: yaw, hand: 'left' });
+    assert.ok(Math.abs(metricVal(straight, 'backswingOffset')) < 0.15, `left-hander straight at yaw ${yaw}: ${metricVal(straight, 'backswingOffset')}`);
+    const carry = run3d({ t0: 300, view: 'rear', yawDeg: yaw, hand: 'left', armOut: -0.16 });
+    assert.ok(metricVal(carry, 'backswingOffset') < -0.3, 'left-hander carry');
+  }
+}
+
+{
+  // 横: 前傾(真値25°)と膝(真値130°)は、カメラとの角度がずれても 3D ならほぼ一定。2D は大きくずれる
+  const row = [];
+  for (const yaw of [0, 20, 40]) {
+    const rep = run3d({ t0: 400, view: 'side', yawDeg: yaw });
+    assert.ok(rep.isValidThrow && rep.method === '3d', `side 3d at yaw ${yaw}: ${rep.summary}`);
+    row.push([yaw, metricVal(rep, 'trunkLean'), metricVal(rep, 'slideKnee')]);
+    assert.ok(Math.abs(metricVal(rep, 'trunkLean') - 25) < 4, `3D lean at yaw ${yaw}: ${metricVal(rep, 'trunkLean')}`);
+    assert.ok(Math.abs(metricVal(rep, 'slideKnee') - 130) < 6, `3D knee at yaw ${yaw}: ${metricVal(rep, 'slideKnee')}`);
+  }
+  const two40 = analyze({ frames: make3dThrow({ t0: 400, view: 'side', yawDeg: 40 }).map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: 401.5, view: 'side' });
+  console.log('side lean (true 25): 3D', row.map(r => `${r[0]}°:${r[1].toFixed(1)}`).join(' '), '/ 2D yaw40:', metricVal(two40, 'trunkLean').toFixed(1));
+  assert.ok(Math.abs(metricVal(two40, 'trunkLean') - 25) > 4, '2D lean drifts at a large angle');
+}
+
+{
+  // 3D の座標にぶれがあっても(横/縦 1cm、奥行き 4cm、2D も 0.3%)、後方の腕の位置は大きく外れない
+  for (const yaw of [-20, 0, 20]) {
+    const rep = run3d({ t0: 500, view: 'rear', yawDeg: yaw, noise2: 0.003, noise3: 0.01, seed: 7 + yaw });
+    assert.ok(rep.isValidThrow && rep.method === '3d', `noisy 3d valid at yaw ${yaw}`);
+    assert.ok(Math.abs(metricVal(rep, 'backswingOffset')) < 0.25, `noisy 3D backswingOffset at yaw ${yaw}: ${metricVal(rep, 'backswingOffset')}`);
+  }
+}
+
+{
+  // 3D 座標が足りないときは 2D に戻る。一部のフレームだけに 3D が付いていても 2D
+  const full = make3dThrow({ t0: 600, view: 'rear', yawDeg: 0 });
+  const partial = full.map((f, i) => (i % 2 ? { t: f.t, j: f.j } : f)); // 半分に 3D なし
+  const rep = analyze({ frames: partial, hand: 'right', throwStart: 601.5, view: 'rear' });
+  assert.equal(rep.method, '3d' === rep.method ? '3d' : '2d');
+  assert.equal(rep.method, '2d', 'insufficient 3D coverage -> 2D');
+  assert.deepEqual(rep.notes, [], 'no 3D attempt -> no note');
+
+  // お手本の測定方式が違うときは適用しない(旧方式のお手本は 2D 扱い)
+  const frames3 = make3dThrow({ t0: 700, view: 'rear', yawDeg: 0 });
+  const old = { ranges: { backswingOffset: { good: [5, 6], ok: [4, 7] } }, stats: { backswingOffset: { mean: 5.5 } } }; // method なし = 2D
+  const r3 = analyze({ frames: frames3, hand: 'right', throwStart: 701.5, view: 'rear', preset: old });
+  assert.equal(r3.method, '3d');
+  assert.equal(r3.presetSkipped, true, 'a 2D preset is not applied to a 3D analysis');
+  assert.ok(r3.notes.some(n => n.includes('お手本は測定方式が違う')));
+  assert.equal(r3.metrics.find(m => m.key === 'backswingOffset').target, '', 'no preset target shown');
+  const same = analyze({ frames: frames3, hand: 'right', throwStart: 701.5, view: 'rear', preset: { ...old, method: '3d' } });
+  assert.equal(same.presetSkipped, false);
+  assert.ok(same.metrics.find(m => m.key === 'backswingOffset').target !== '');
+
+  // 比較は同じ測定方式の履歴だけ
+  const mkRec = (method, date) => ({ date, view: 'rear', hand: 'right', report: { isValidThrow: true, method, metrics: [] } });
+  const sel = selectHistory([mkRec('3d', 1), mkRec('2d', 2), { date: 3, view: 'rear', hand: 'right', report: { isValidThrow: true, metrics: [] } }], { view: 'rear', hand: 'right', method: '3d' });
+  assert.equal(sel.length, 1, 'only the same method is compared (no method = 2d)');
 }
 
 console.log('OK');

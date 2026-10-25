@@ -1,4 +1,6 @@
-// 2D 姿勢の時系列からフォーム指標を計算する (iOS 版 FormAnalyzer.swift の移植)。
+import { hipAxis, smoothAxes, toBody, angle3, dist3, mid3 } from './body3d.js';
+
+// 姿勢の時系列からフォーム指標を計算する (iOS 版 FormAnalyzer.swift の移植)。
 // 座標は 0..1 に正規化、原点は左上(y は下向き)。時刻は秒。
 
 export const SPECS = {
@@ -136,7 +138,9 @@ function fillGaps(samples, keys, maxGap = 0.3) {
       if (a && b && a[key] && b[key] && b.t - a.t <= maxGap) {
         for (let k = i; k < j; k++) {
           const u = (samples[k].t - a.t) / (b.t - a.t);
-          samples[k][key] = { x: a[key].x + (b[key].x - a[key].x) * u, y: a[key].y + (b[key].y - a[key].y) * u };
+          const out = {};
+          for (const p of Object.keys(a[key])) out[p] = a[key][p] + (b[key][p] - a[key][p]) * u;
+          samples[k][key] = out;
           samples[k].interp = true;
         }
       }
@@ -146,12 +150,27 @@ function fillGaps(samples, keys, maxGap = 0.3) {
 }
 
 /**
- * スイングの構造を決める。リリース = 手首が最も低い点。バックスイング頂点 = その直前(1.5秒以内)で最も高い点。
- * (全体で一番高い点を頂点にすると、リリース後のフォロースルーで腕が高く上がったとき、それを頂点と取り違える)
+ * スイングの構造を決める。
+ *  - リリース: 手首が最も低い付近(最大値から 0.3 以内)を「底」としてまとめ、そのあとフォロースルーで腕が上がる(0.5 以上)
+ *    最後の底。構えのあとにも腕が一度下がる(振り子の底)ので、全体の最大だけで決めるとそれと取り違える。
+ *  - バックスイング頂点: リリースの直前(1.5秒以内)で最も高い点。
+ *    (全体で一番高い点を頂点にすると、リリース後のフォロースルーで腕が高く上がったとき、それを頂点と取り違える)
  */
 function findSwing(s, wy) {
-  let rel = 0;
-  for (let i = 1; i < wy.length; i++) if (wy[i] > wy[rel]) rel = i;
+  const max = Math.max(...wy);
+  const thr = max - 0.3;
+  const clusters = [];
+  for (let i = 0; i < wy.length;) {
+    if (wy[i] < thr) { i++; continue; }
+    let j = i, best = i;
+    while (j < wy.length && wy[j] >= thr) { if (wy[j] > wy[best]) best = j; j++; }
+    clusters.push({ best, end: j - 1 });
+    i = j;
+  }
+  const risen = (c) => c.end + 1 < wy.length && wy[c.best] - Math.min(...wy.slice(c.end + 1)) >= 0.5;
+  const pick = [...clusters].reverse().find(risen)
+    || clusters.reduce((b, c) => (wy[c.best] > wy[b.best] ? c : b));
+  const rel = pick.best;
   let back = -1;
   for (let i = 0; i < rel; i++) {
     if (s[rel].t - s[i].t > 1.5) continue;
@@ -271,8 +290,7 @@ export function summarize(metrics, exclude = []) {
   return issues.map(m => m.advice).join(' ');
 }
 
-export function analyze({ frames, hand, throwStart, view = 'side', preset = null }) {
-  if (view === 'rear') return analyzeRear({ frames, hand, throwStart, preset });
+function analyzeSide({ frames, hand, throwStart, preset }) {
   const M = (k, v) => metric(k, v, preset);
   const endTime = frames.length ? frames[frames.length - 1].t : throwStart;
   const invalid = (why) => ({
@@ -320,11 +338,180 @@ export function analyze({ frames, hand, throwStart, view = 'side', preset = null
   };
 }
 
+
+// ---------------------------------------------------------------- 3D(体の向きを基準にした測定)
+
+/** 3D 座標(w)が十分なフレームに付いているか */
+function hasWorld(frames) {
+  const n = frames.filter(f => f.w).length;
+  return n >= 12 && n >= 0.8 * frames.length;
+}
+
+function median(a) {
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+}
+
+/**
+ * 体の座標系(lat/fwd/up)で測る。カメラに対する体の向きによるずれが入らない。
+ * 3D が足りない/スイングを検出できないときは null か無効な結果を返し、呼び出し側が2Dに切り替える。
+ */
+function analyzeBody({ frames, hand, throwStart, view, preset }) {
+  const M = (k, v) => metric(k, v, preset);
+  const c = CHAIN[hand];
+  const sgn = hand === 'right' ? 1 : -1; // 投球腕の「体の外側」= 右投げは +lat、左投げは -lat
+  const endTime = frames.length ? frames[frames.length - 1].t : throwStart;
+  const invalid = (why) => ({
+    isValidThrow: false, view, method: '3d', metrics: [], startTime: throwStart, backswingTime: 0, releaseTime: 0, endTime, summary: why
+  });
+
+  const fr = frames.filter(f => f.w && f.j && f.w.leftHip && f.w.rightHip && f.w.leftShoulder && f.w.rightShoulder && f.w[c.shoulder]
+    && f.j.leftHip && f.j.rightHip && f.j.leftShoulder && f.j.rightShoulder);
+  if (fr.length < 12) return null;
+  const axes = smoothAxes(fr.map(f => hipAxis(f.w)));
+  if (axes.some(a => !a)) return null;
+  const all = fr.map((f, i) => {
+    const b = toBody(f.w, axes[i]);
+    return { t: f.t, j: f.j, b, wrist: b[c.wrist] || null, elbow: b[c.elbow] || null };
+  });
+  fillGaps(all, ['wrist', 'elbow']);
+  const s = all.filter(x => x.wrist);
+  if (s.length < 12 || s[s.length - 1].t - s[0].t < 0.8) return null;
+
+  const ZERO = { lat: 0, fwd: 0, up: 0 };
+  const shMid = (x) => mid3(x.b.leftShoulder, x.b.rightShoulder);
+  const torso3 = s.map(x => Math.max(dist3(shMid(x), ZERO), 0.1));     // 胴体の長さ(m)
+  const dom = (x) => x.b[c.shoulder];
+  const shW = (x) => Math.max(dist3(x.b.rightShoulder, x.b.leftShoulder), 0.15); // 肩幅(m)
+  const upOf = (x, k) => (x.wrist.up - dom(x).up) / torso3[k];
+
+  // 腰を基準にした手首の高さ(下向きが正、胴体長で正規化) — 2D と同じ向きの定義
+  const wy = smooth(s.map((x, i) => -x.wrist.up / torso3[i]));
+  const { back, rel } = findSwing(s, wy);
+  if (back < 0) return invalid('バックスイングを検出できませんでした。');
+  if (wy[rel] - wy[back] < 1.0 || rel - back < 3) return invalid('投球スイングとして認識できませんでした。');
+
+  // 助走の確認は画像上の動き(2D)で行う
+  const t2 = (x) => Math.max(dist(mid(x.j.leftShoulder, x.j.rightShoulder), mid(x.j.leftHip, x.j.rightHip)), 0.02);
+  const hip2 = (x) => mid(x.j.leftHip, x.j.rightHip);
+  if (view === 'rear') {
+    if (t2(s[0]) / t2(s[rel]) < 1.12) return invalid('助走(奥へ進む動き)が確認できませんでした。');
+  } else if (Math.abs(hip2(s[rel]).x - hip2(s[0]).x) / Math.max(median(s.map(t2)), 0.05) < 1.0) {
+    return invalid('助走(前へ進む動き)が確認できませんでした。');
+  }
+
+  // ぶれを抑えるため、基準の1フレームではなく、前後2フレームの中央値を使う
+  const at = (i, fn) => median(Array.from({ length: Math.min(s.length - 1, i + 2) - Math.max(0, i - 2) + 1 }, (_, n) => {
+    const k = Math.max(0, i - 2) + n;
+    return fn(s[k], k);
+  }));
+  const offsetOf = (x) => ((x.wrist.lat - dom(x).lat) * sgn) / shW(x);
+  const behindOf = (x, k) => (dom(x).fwd - x.wrist.fwd) / torso3[k];
+
+  const metrics = [];
+  metrics.push(M('backswingHeight', -wy[back]));
+  if (view === 'rear') {
+    metrics.push(M('backswingOffset', at(back, offsetOf)));
+    metrics.push(M('releaseOffset', at(rel, offsetOf)));
+    let sep = 0;
+    for (let i = back; i <= rel; i++) sep += offsetOf(s[i]);
+    metrics.push(M('armSeparation', sep / (rel - back + 1)));
+    const other = (x) => x.b[OTHER_SHOULDER[hand]];
+    metrics.push(M('shoulderTilt', at(rel, (x) => Math.atan2(other(x).up - dom(x).up, Math.max(Math.abs(dom(x).lat - other(x).lat), 0.02)) * 180 / Math.PI)));
+    metrics.push(M('backswingBehind', at(back, behindOf)));
+  } else {
+    metrics.push(M('backswingBehind', at(back, behindOf)));
+    metrics.push(M('trunkLean', at(rel, (x) => Math.atan2(shMid(x).fwd, shMid(x).up) * 180 / Math.PI)));
+    if (s[rel].b[c.hip] && s[rel].b[c.knee] && s[rel].b[c.ankle]) {
+      metrics.push(M('slideKnee', at(rel, (x) => (x.b[c.hip] && x.b[c.knee] && x.b[c.ankle] ? angle3(x.b[c.knee], x.b[c.hip], x.b[c.ankle]) : NaN))));
+    }
+    if (s[rel].elbow) metrics.push(M('elbow', at(rel, (x) => (x.elbow ? angle3(x.elbow, dom(x), x.wrist) : NaN))));
+  }
+
+  const after = afterRelease(s, rel);
+  const followMeasured = after.n >= FOLLOW_MIN_FRAMES && after.span >= FOLLOW_MIN_SPAN;
+  if (followMeasured) {
+    let follow = -Infinity;
+    for (let i = rel; i < s.length; i++) follow = Math.max(follow, upOf(s[i], i));
+    metrics.push(M('followThrough', follow));
+  }
+  if (view === 'rear') {
+    const widths2 = s.map(x => Math.abs(x.j[c.shoulder].x - x.j[OTHER_SHOULDER[hand]].x)).sort((a, z) => a - z);
+    const medW = Math.max(widths2[Math.floor(widths2.length / 2)], 0.02);
+    metrics.push(M('approachDrift', Math.abs(hip2(s[rel]).x - hip2(s[0]).x) / medW));
+  }
+  metrics.push(info('approachTime', '助走開始〜リリース', Math.max(0, s[rel].t - throwStart), '秒'));
+  metrics.push(info('swingTime', 'バックスイング頂点〜リリース', s[rel].t - s[back].t, '秒'));
+
+  return {
+    isValidThrow: true, view, method: '3d', metrics, startTime: throwStart, backswingTime: s[back].t,
+    releaseTime: s[rel].t, endTime, summary: summarize(metrics),
+    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured }
+  };
+}
+
+/** お手本は、同じ測定方式で作ったものだけ使う(2D と 3D では値の意味が少し違う)。方式不明の古いものは 2D 扱い。 */
+function presetFor(method, preset) {
+  if (!preset) return { preset: null, skipped: false };
+  const ok = (preset.method || '2d') === method;
+  return { preset: ok ? preset : null, skipped: !ok };
+}
+
+/**
+ * 解析の入口。3D(体の向き基準)で測れるときは3D、測れないとき(3D 座標が足りない・3D でスイングを検出できない)は
+ * 従来の2D(画像上)で測る。report.method に使った方式が入る。
+ */
+export function analyze({ frames, hand, throwStart, view = 'side', preset = null }) {
+  const notes = [];
+  let report = null;
+  let skipped = false;
+  const world = hasWorld(frames);
+  if (world) {
+    const p3 = presetFor('3d', preset);
+    const body = analyzeBody({ frames, hand, throwStart, view, preset: p3.preset });
+    if (body && body.isValidThrow) { report = body; skipped = p3.skipped; }
+    else notes.push('3D(体の向き基準)で測れなかったため、画像上の2D方式で測定しました。');
+  }
+  if (!report) {
+    const p2 = presetFor('2d', preset);
+    report = view === 'rear'
+      ? analyzeRear({ frames, hand, throwStart, preset: p2.preset })
+      : analyzeSide({ frames, hand, throwStart, preset: p2.preset });
+    report.method = '2d';
+    skipped = p2.skipped;
+  }
+  if (skipped) notes.push(`お手本は測定方式が違う(お手本: ${(preset.method || '2d').toUpperCase()} / 今回: ${report.method.toUpperCase()})ため適用していません。お手本を作り直してください。`);
+  report.presetSkipped = skipped;
+  report.notes = notes;
+  return report;
+}
+
 /** 1フレームから取れるリアルタイム表示用の指標 */
 export function instant(f, hand, direction, view = 'side', preset = null) {
-  const M = (k, v) => metric(k, v, preset);
   const out = [];
   const j = f.j, c = CHAIN[hand];
+  const ax = f.w && hipAxis(f.w);
+  if (ax && f.w.leftShoulder && f.w.rightShoulder && f.w[c.shoulder]) {
+    // 3D(体の向き基準)
+    const M3 = (k, v) => metric(k, v, presetFor('3d', preset).preset);
+    const b = toBody(f.w, ax);
+    const sgn = hand === 'right' ? 1 : -1;
+    const d = b[c.shoulder];
+    if (view === 'rear') {
+      const o = b[OTHER_SHOULDER[hand]];
+      if (o) {
+        out.push(M3('shoulderTilt', Math.atan2(o.up - d.up, Math.max(Math.abs(d.lat - o.lat), 0.02)) * 180 / Math.PI));
+        if (b[c.wrist]) out.push(M3('releaseOffset', ((b[c.wrist].lat - d.lat) * sgn) / Math.max(dist3(b.rightShoulder, b.leftShoulder), 0.15)));
+      }
+      return out;
+    }
+    const sm = mid3(b.leftShoulder, b.rightShoulder);
+    out.push(M3('trunkLean', Math.atan2(sm.fwd, sm.up) * 180 / Math.PI));
+    if (b[c.hip] && b[c.knee] && b[c.ankle]) out.push(M3('slideKnee', angle3(b[c.knee], b[c.hip], b[c.ankle])));
+    if (b[c.elbow] && b[c.wrist]) out.push(M3('elbow', angle3(b[c.elbow], d, b[c.wrist])));
+    return out;
+  }
+  const M = (k, v) => metric(k, v, presetFor('2d', preset).preset);
   if (view === 'rear') {
     const dom = j[c.shoulder], other = j[OTHER_SHOULDER[hand]], wrist = j[c.wrist];
     if (dom && other) {

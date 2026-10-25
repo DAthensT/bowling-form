@@ -39,9 +39,10 @@ function slope(ys) {
  * 同じ撮影位置・利き手の、解析済みの投球だけを新しい順に取り出す。
  * records: [{date, view, hand, report}]
  */
-export function selectHistory(records, { view, hand }) {
+export function selectHistory(records, { view, hand, method }) {
   return records
-    .filter(r => r.report && r.report.isValidThrow !== false && (r.view || 'side') === view && r.hand === hand)
+    .filter(r => r.report && r.report.isValidThrow !== false && (r.view || 'side') === view && r.hand === hand
+      && (!method || (r.report.method || '2d') === method))
     .sort((a, b) => b.date - a.date)
     .map(r => r.report);
 }

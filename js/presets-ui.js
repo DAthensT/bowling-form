@@ -138,7 +138,7 @@ export function initPresetsTab({ onChanged }) {
     list.innerHTML = items.map((p) => {
       const src = p.source ? `<div class="muted">出典: ${esc(p.source)}</div>` : '';
       return `<div class="preset" data-id="${p.id}"><b>${esc(p.name)}${p.id === active ? ' ✅使用中' : ''}</b>` +
-        `<div class="muted">${VIEW_LABEL[p.view]}・投球 ${p.throwsCount} 件・${new Date(p.createdAt).toLocaleDateString('ja-JP')}</div>${src}` +
+        `<div class="muted">${VIEW_LABEL[p.view]}・投球 ${p.throwsCount} 件・${new Date(p.createdAt).toLocaleDateString('ja-JP')}・測定方式 ${(p.method || '2d') === '3d' ? '3D' : '2D(旧方式。作り直し推奨)'}</div>${src}` +
         `<div class="actions"><button class="small" data-act="use">${p.id === active ? '使用をやめる' : '使用する'}</button>` +
         `<button class="small" data-act="export">書き出し</button><button class="small danger" data-act="del">削除</button></div></div>`;
     }).join('');
