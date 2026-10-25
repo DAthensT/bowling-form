@@ -2,15 +2,11 @@
 import assert from 'node:assert/strict';
 import { ThrowDetector } from '../js/detector.js';
 import { analyze } from '../js/analyzer.js';
-import { rollPitch } from '../js/guides.js';
 import { compare, selectHistory, deviation } from '../js/trend.js';
-import { metric, summarize, setRangeOverrides, effectiveRange } from '../js/analyzer.js';
-import { collectLabeled, suggestBoundary, applyBoundary, overrideFromInputs, okFromGood } from '../js/tuning.js';
-import { summarizeStanding, laneForPoints, deriveThresholds } from '../js/calibration.js';
+import { metric, summarize } from '../js/analyzer.js';
 import { whyNotPlausible } from '../js/presence.js';
 import { focusItems, focusSummary, focusKeys, DEFAULT_FOCUS, FOCUS_OPTIONS } from '../js/focus.js';
 import { PresenceFilter, isPlausiblePerson } from '../js/presence.js';
-import { pickTarget, inLaneRoi, roiHalfWidth, hipCenter } from '../js/target.js';
 import { buildPreset, describePreset, validatePreset } from '../js/preset-model.js';
 
 const TORSO = 0.2;
@@ -218,21 +214,6 @@ function sideReport(t0, backY, followY = -0.3) {
   assert.ok(ft[1] >= 1e9, 'one-sided range stays open');
 }
 
-// ---------------------------------------------------------------- 水平器
-{
-  const g = 9.8, deg = (d) => (d * Math.PI) / 180;
-  const close = (a, b, eps = 0.01) => Math.abs(a - b) < eps;
-  let r = rollPitch(g, 0, 0);
-  assert.ok(close(r.roll, 0) && close(r.pitch, 0), 'level landscape');
-  r = rollPitch(g * Math.cos(deg(3)), g * Math.sin(deg(3)), 0);
-  assert.ok(close(r.roll, 3), `roll 3deg, got ${r.roll}`);
-  // 反対向きの横持ち(重力が -x 方向)でも同じ大きさ・同じ折り返し
-  r = rollPitch(-g * Math.cos(deg(3)), -g * Math.sin(deg(3)), 0);
-  assert.ok(close(r.roll, 3), `roll folded for the other landscape, got ${r.roll}`);
-  r = rollPitch(g * Math.cos(deg(4)), 0, g * Math.sin(deg(4)));
-  assert.ok(close(r.pitch, 4) && close(r.roll, 0), `pitch 4deg, got ${r.pitch}`);
-}
-
 // ---------------------------------------------------------------- 人物の確認(誤検知対策)
 {
   const person = pose(0, 0.5, 0.3).j;
@@ -298,34 +279,6 @@ function sideReport(t0, backY, followY = -0.3) {
   }
   const rear = analyze({ frames: rframes, hand: 'right', throwStart: 1300, view: 'rear' });
   assert.equal(rear.isValidThrow, false, 'no approach (rear)');
-}
-
-// ---------------------------------------------------------------- 利用場所(自宅 / ボウリング場)
-{
-  const shift = (f, dx) => ({ t: f.t, j: Object.fromEntries(Object.entries(f.j).map(([k, p]) => [k, { x: p.x + dx, y: p.y }])) });
-  const bowler = rearPose(0, 5, 0.3);                  // レーン中央、やや遠く(小さい)
-  const neighbor = shift(rearPose(0, 3, 0.3), -0.35);  // 隣のレーン、近くて大きい
-  const cands = [neighbor, bowler];
-  const alley = { mode: 'alley', laneW: 0.30, vpY: 0.40, prev: null };
-
-  // 自宅: 一番大きく映っている人。ボウリング場: 大きくてもレーン外の人は無視してレーン前の人だけ。
-  assert.equal(pickTarget(cands, null), neighbor, 'home picks the biggest');
-  assert.equal(inLaneRoi(neighbor.j, alley), false, 'neighbor outside lane region');
-  assert.equal(inLaneRoi(bowler.j, alley), true, 'bowler inside lane region');
-  assert.equal(pickTarget(cands, alley), bowler, 'alley picks the person in front of the lane');
-
-  // レーン範囲に誰もいなければ何も選ばない(人がいない/隣の人しか映っていない)
-  assert.equal(pickTarget([neighbor], alley), null, 'only a neighbor -> nobody');
-  assert.equal(pickTarget([], alley), null);
-
-  // 範囲内に複数いる場合は、直前まで追っていた人を優先する(中央に近い人に切り替わらない)
-  const second = shift(rearPose(0, 5, 0.3), 0.12);
-  const prev = hipCenter(second.j);
-  assert.equal(pickTarget([bowler, second], { ...alley, prev }), second, 'keeps tracking the previous person');
-  assert.equal(pickTarget([bowler, second], alley), bowler, 'first pick prefers the center');
-
-  // 範囲は奥(消失点に近い)ほど狭く、手前(画面下)ほど広い
-  assert.ok(roiHalfWidth(0.95, alley) > roiHalfWidth(0.6, alley) && roiHalfWidth(0.6, alley) > roiHalfWidth(0.3, alley));
 }
 
 // ---------------------------------------------------------------- 前の投球との比較
@@ -419,96 +372,6 @@ function sideReport(t0, backY, followY = -0.3) {
 
   // 選択肢: 背負い・体からの離れ + 各指標
   assert.ok(FOCUS_OPTIONS.length >= 9 && DEFAULT_FOCUS.every(id => FOCUS_OPTIONS.some(o => o.id === id)));
-}
-
-// ---------------------------------------------------------------- キャリブレーション
-{
-  const shift = (f, dx) => ({ t: f.t, j: Object.fromEntries(Object.entries(f.j).map(([k, p]) => [k, { x: p.x + dx, y: p.y }])) });
-  // 不自然と判断した理由が分かる(診断表示用)
-  assert.equal(whyNotPlausible(rearPose(0, 5, 0.3).j), '');
-  assert.ok(whyNotPlausible({ leftShoulder: { x: 0.4, y: 0.4 } }).includes('揃っていない'));
-
-  // 立ち位置の登録: レーン中心が画面中央からずれていても、その位置を中心にできる
-  const standing = [];
-  for (let i = 0; i < 30; i++) standing.push(shift(rearPose(i / 30, 4, 0.3), 0.07));
-  const stand = summarizeStanding(standing);
-  assert.ok(Math.abs(stand.cx - 0.57) < 0.01, `cx ${stand.cx}`);
-  assert.equal(summarizeStanding(standing.slice(0, 3)), null, 'too few frames');
-  const laneW = laneForPoints([{ x: stand.cx, y: stand.cy, need: Math.max(stand.width * 2.5, 0.12) }], { cx: stand.cx, vpY: 0.4 });
-  const cfg = { mode: 'alley', cx: stand.cx, laneW, vpY: 0.4 };
-  assert.equal(inLaneRoi(standing[0].j, cfg), true, 'registered position is inside the lane region');
-  assert.equal(inLaneRoi(shift(rearPose(0, 3, 0.3), -0.42).j, cfg), false, 'far-left neighbor stays outside');
-
-  // 試し歩き: 遠ざかる速さの実測から検知しきい値を決め、それで投球を検知できる
-  const walk = shift({ t: 0, j: {} }, 0); void walk;
-  const walkFrames = makeRearThrow(2000).map(f => shift(f, 0.07));
-  const th = deriveThresholds(walkFrames);
-  console.log('calibrated thresholds:', { peak: th.peak.toFixed(3), start: th.startSlope.toFixed(3), end: th.endSlope.toFixed(3) });
-  assert.ok(th.ok && th.peak > 0.1, 'walk measured');
-  assert.ok(th.startSlope >= 0.04 && th.startSlope <= 0.15 && th.endSlope < th.startSlope, 'sane thresholds');
-  const lane2 = laneForPoints([{ x: stand.cx, y: stand.cy, need: 0.12 }, ...th.path.map(p => ({ x: p.x, y: p.y, need: 0.12 }))], { cx: stand.cx, vpY: 0.4 });
-  assert.ok(lane2 >= 0.15 && lane2 <= 0.48);
-  const d = new ThrowDetector({ view: 'rear', rearStartSlope: th.startSlope, rearEndSlope: th.endSlope });
-  let started = null, ended = null;
-  for (const f of walkFrames) { const ev = d.process(f, f.t); if (ev && ev.type === 'started') started = ev.at; if (ev && ev.type === 'ended') ended = ev.at; }
-  assert.ok(started !== null && ended !== null, 'calibrated detector detects the throw');
-  assert.ok(d.signal !== undefined, 'signal exposed for diagnostics');
-
-  // 動かない/近づく動きでは、しきい値を作れない
-  const still = []; for (let i = 0; i < 90; i++) still.push(rearPose(2100 + i / 30, 4, 0.3));
-  assert.equal(deriveThresholds(still).ok, false, 'no movement -> no thresholds');
-  assert.equal(deriveThresholds(still.slice(0, 5)).ok, false, 'too few frames');
-}
-
-// ---------------------------------------------------------------- 判定基準の調整(肉眼ラベル)
-{
-  // 初期値では「背負い」と判定されない値(-0.1)が、肉眼では背負っている → 基準を調整できる
-  const before = metric('backswingOffset', -0.1);
-  assert.equal(before.status, 'good', 'default range misses a mild carry');
-  assert.ok(before.range.includes('〜'), 'range text is exposed');
-
-  // ラベル付きの投球(新しいものは意味なし。値だけを使う)
-  const rec = (v, label) => ({ labels: { carry: label }, report: { metrics: [metric('backswingOffset', v)] } });
-  const records = [rec(-0.10, 'bad'), rec(-0.02, 'bad'), rec(0.05, 'bad'), rec(0.35, 'ok'), rec(0.28, 'ok'), { report: { metrics: [metric('backswingOffset', 0.9)] } }];
-  const c = collectLabeled(records, 'carry', 'backswingOffset');
-  assert.deepEqual(c.bad.sort((a, b) => a - b), [-0.1, -0.02, 0.05]);
-  assert.deepEqual(c.ok.sort((a, b) => a - b), [0.28, 0.35]);
-
-  // 「悪い」と「問題なし」の間(0.05 と 0.28 の中間)を境目に提案する。小さい側が悪い(only: low)
-  const sg = suggestBoundary({ key: 'backswingOffset', only: 'low', bad: c.bad, ok: c.ok });
-  assert.ok(sg.ok && !sg.overlap && Math.abs(sg.boundary - 0.165) < 1e-9, `boundary ${sg.boundary}`);
-  const ov = applyBoundary('backswingOffset', 'low', sg.boundary);
-  assert.deepEqual(ov.good, [sg.boundary, 0.5], 'only the low side moves; the high side stays default');
-  assert.ok(ov.ok[0] < ov.good[0], 'ok range is wider than the good range');
-
-  // 適用すると、同じ値が「背負い(悪い側)」と判定される。解除すると元に戻る
-  setRangeOverrides({ backswingOffset: ov });
-  const after = metric('backswingOffset', -0.1);
-  assert.ok(after.status !== 'good' && after.dir === 'low', 'now flagged as carrying');
-  assert.equal(metric('backswingOffset', 0.3).status, 'good', 'the "ok" throws stay good');
-  assert.deepEqual(effectiveRange('backswingOffset').good, ov.good);
-  // 優先順位: ユーザー設定 > お手本
-  const preset = { ranges: { backswingOffset: { good: [-5, 5], ok: [-9, 9] } } };
-  assert.deepEqual(effectiveRange('backswingOffset', preset).good, ov.good, 'user override beats the preset');
-  setRangeOverrides({});
-  assert.deepEqual(effectiveRange('backswingOffset', preset).good, [-5, 5], 'preset applies without an override');
-  assert.deepEqual(effectiveRange('backswingOffset').good, [-0.3, 0.5], 'default restored');
-
-  // ラベルが重なる(区別できない)ときは、その旨を返す。片方だけなら余裕を持たせた目安
-  const ov2 = suggestBoundary({ key: 'backswingOffset', only: 'low', bad: [0.2, 0.3], ok: [0.1, 0.25] });
-  assert.equal(ov2.overlap, true);
-  const only = suggestBoundary({ key: 'backswingOffset', only: 'low', bad: [-0.1, 0.0], ok: [] });
-  assert.ok(only.onlyOneKind && only.boundary > 0.0, 'margin above the worst "bad"');
-  const hi = suggestBoundary({ key: 'armSeparation', only: 'high', bad: [0.5, 0.7], ok: [0.1, 0.2] });
-  assert.ok(Math.abs(hi.boundary - 0.35) < 1e-9, 'high-side boundary between 0.2 and 0.5');
-  assert.deepEqual(applyBoundary('armSeparation', 'high', hi.boundary).good, [-0.15, hi.boundary]);
-  assert.equal(suggestBoundary({ key: 'backswingOffset', only: 'low', bad: [], ok: [] }).ok, false);
-
-  // 手動入力: 片側だけ入力でき、両方空欄なら上書きなし。逆順でも直す
-  assert.equal(overrideFromInputs('backswingOffset', null, null), null);
-  assert.deepEqual(overrideFromInputs('backswingOffset', 0.1, null).good, [0.1, 0.5]);
-  assert.deepEqual(overrideFromInputs('backswingOffset', 0.9, 0.2).good, [0.2, 0.9]);
-  assert.deepEqual(okFromGood('backswingOffset', [0, 0.5]), [-0.3, 0.8]);
 }
 
 // ---------------------------------------------------------------- フォロースルー

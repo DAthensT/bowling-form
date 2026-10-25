@@ -1,6 +1,5 @@
 // MediaPipe Pose Landmarker のラッパー。
 import { whyNotPlausible } from './presence.js';
-import { pickTarget } from './target.js';
 import { FilesetResolver, PoseLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs';
 
 const WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm';
@@ -32,6 +31,12 @@ export const SENSITIVITY = {
 const ARM_JOINTS = new Set(['leftElbow', 'rightElbow', 'leftWrist', 'rightWrist']);
 const ARM_VIS_MIN = 0.25;
 
+const heightOf = (j) => {
+  const ys = Object.values(j).map(p => p.y);
+  return Math.max(...ys) - Math.min(...ys);
+};
+const pickLargest = (candidates) => candidates.reduce((best, c) => (!best || heightOf(c.j) > heightOf(best.j) ? c : best), null);
+
 export async function createPoseDetector() {
   const fileset = await FilesetResolver.forVisionTasks(WASM);
   const options = (delegate) => ({
@@ -51,12 +56,10 @@ export async function createPoseDetector() {
   }
 
   let visMin = SENSITIVITY.normal.vis;
-  let diag = { people: 0, visFail: 0, implausible: 0, reasons: {}, candidates: 0, inside: 0, picked: false };
+  let diag = { people: 0, visFail: 0, implausible: 0, reasons: {}, candidates: 0, picked: false };
 
   return {
     close() { landmarker.close(); },
-    /** 同時に検出する人数。ボウリング場では隣の人が映るので多めにする。 */
-    setMaxPeople(n) { landmarker.setOptions({ numPoses: n }); },
     /** 'strict' | 'normal' | 'loose' */
     setSensitivity(level) {
       const v = SENSITIVITY[level] || SENSITIVITY.normal;
@@ -65,13 +68,10 @@ export async function createPoseDetector() {
     },
     /** 直近の detect の内訳(診断表示用) */
     get diag() { return diag; },
-    /**
-     * 戻り値: {t: 秒, j: {関節名: {x, y}}} または null。
-     * targetCfg が null なら一番大きく映っている人(自宅)。ボウリング場モードならレーン範囲内の人だけ(target.js)。
-     */
-    detect(video, nowMs, targetCfg = null) {
+    /** 戻り値: {t: 秒, j: {関節名: {x, y}}} または null。他の人は写らない前提で、一番大きく映っている人を返す。 */
+    detect(video, nowMs) {
       const result = landmarker.detectForVideo(video, nowMs);
-      const d = { people: 0, visFail: 0, implausible: 0, reasons: {}, candidates: 0, inside: 0, picked: false };
+      const d = { people: 0, visFail: 0, implausible: 0, reasons: {}, candidates: 0, picked: false };
       const candidates = [];
       for (const lm of result.landmarks || []) {
         d.people++;
@@ -90,10 +90,8 @@ export async function createPoseDetector() {
         if (why) { d.implausible++; d.reasons[why] = (d.reasons[why] || 0) + 1; continue; }
         candidates.push({ t: nowMs / 1000, j });
       }
-      const stats = {};
-      const best = pickTarget(candidates, targetCfg, stats);
-      d.candidates = stats.candidates || 0;
-      d.inside = stats.inside || 0;
+      const best = pickLargest(candidates);
+      d.candidates = candidates.length;
       d.picked = !!best;
       diag = d;
       return best;
