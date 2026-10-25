@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ボウリングフォーム">
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <title>ボウリングフォーム</title>
+</head>
+<body>
+  <main>
+    <!-- 撮影 -->
+    <section id="tab-live" class="tab active">
+      <div class="live">
+        <div class="stage-wrap">
+          <div id="stage">
+            <video id="video" playsinline muted autoplay></video>
+            <canvas id="overlay"></canvas>
+            <canvas id="guide"></canvas>
+          </div>
+          <div id="startPanel">
+            <button id="startBtn" class="primary">カメラを開始</button>
+            <p id="startNote">スマホを三脚に固定し、全身が映るように撮影してください。撮影位置(真横/真後ろ)は右の設定で選べます。</p>
+          </div>
+        </div>
+        <aside class="side">
+          <div class="state"><span id="stateDot" class="dot s-good"></span><b id="stateLabel">停止中</b>
+            <span id="fps" class="muted"></span>
+            <button id="stopBtn" class="small" hidden>停止</button></div>
+          <p id="message" class="muted">「カメラを開始」を押してください</p>
+          <label class="field">利き手
+            <select id="handLive"><option value="right">右投げ</option><option value="left">左投げ</option></select>
+          </label>
+          <label class="field">撮影位置
+            <select id="viewLive"><option value="side">真横から</option><option value="rear">真後ろから</option></select>
+          </label>
+          <p id="viewNote" class="muted"></p>
+          <label class="field">利用場所
+            <select id="modeLive"><option value="home">自宅(ひとりで練習)</option><option value="alley">ボウリング場(レーン前の人だけ)</option></select>
+          </label>
+          <p id="modeNote" class="muted"></p>
+          <label class="field">お手本
+            <select id="presetLive"><option value="">なし</option></select>
+          </label>
+          <label class="field">検知の感度
+            <select id="sens"><option value="strict">厳しい(誤検知しにくい)</option><option value="normal">標準</option><option value="loose">ゆるい(検知しやすい)</option></select>
+          </label>
+          <h3>キャリブレーション(後方撮影)</h3>
+          <p id="calibInfo" class="muted"></p>
+          <div class="actions">
+            <button id="calibStand" class="small">① 立ち位置を登録</button>
+            <button id="calibWalk" class="small">② 試し歩きで調整</button>
+            <button id="calibClear" class="small danger">消去</button>
+          </div>
+          <p id="calibStatus"></p>
+          <details id="diag"><summary>診断(検知されないとき)</summary><pre id="diagText" class="muted"></pre></details>
+          <h3>設置ガイド</h3>
+          <label class="field check"><input type="checkbox" id="guideOn"> 補助線と水平器を表示</label>
+          <div id="guideCtl" hidden>
+            <div id="laneCtl">
+              <label class="field">レーン幅(画面下端) <input type="range" id="guideW" min="10" max="48" value="30"></label>
+              <label class="field">レーンが交わる高さ <input type="range" id="guideVp" min="15" max="65" value="40"></label>
+            </div>
+            <div class="actions"><button id="levelBtn" class="small">傾きセンサーを有効にする</button>
+              <button id="levelFlip" class="small">傾きの向きを反転</button></div>
+            <p id="levelInfo" class="muted"></p>
+            <p class="muted">緑の線が白い基準線と重なれば水平です。線の向きが逆に動く場合は「向きを反転」を押してください。</p>
+          </div>
+          <p id="focusLine" class="muted"></p>
+          <h3>リアルタイム指標</h3>
+          <div id="liveMetrics" class="muted">人物を検出中…</div>
+          <h3>直近の投球</h3>
+          <div id="last" class="muted">投球するとここに結果が出ます。</div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- 履歴 -->
+    <section id="tab-history" class="tab">
+      <h2>履歴</h2>
+      <div id="historyList"></div>
+    </section>
+
+    <!-- お手本 -->
+    <section id="tab-presets" class="tab">
+      <h2>お手本プリセット</h2>
+      <p class="muted">お手本にしたいボウラーの動画ファイルから、フォームの目標値(良い範囲)を作ります。YouTube の動画は規約上ダウンロードしないので、ご自身が利用してよい動画ファイルを使ってください(出典のURLは控えとして保存できます)。カメラが固定されていて、投球が複数回映っている動画ほど精度が上がります。</p>
+      <div id="presetList"></div>
+
+      <h3>動画から作成</h3>
+      <label class="field">動画ファイル<input type="file" id="pvFile" accept="video/*"></label>
+      <label class="field">名前<input id="pvName" placeholder="例: ○○選手(側面)"></label>
+      <label class="field">出典(URLやメモ・任意)<input id="pvSource" placeholder="https://www.youtube.com/watch?v=…" autocapitalize="off"></label>
+      <div class="grid2">
+        <label class="field">撮影位置<select id="pvView"><option value="side">真横から</option><option value="rear">真後ろから</option></select></label>
+        <label class="field">利き手<select id="pvHand"><option value="right">右投げ</option><option value="left">左投げ</option></select></label>
+        <label class="field">解析速度<select id="pvRate"><option value="0.25">0.25倍(丁寧・遅い)</option><option value="0.5" selected>0.5倍</option><option value="1">1倍(速い)</option></select></label>
+        <label class="field">範囲(秒・空欄=全体)<span class="range"><input id="pvFrom" type="number" min="0" placeholder="開始"><input id="pvTo" type="number" min="0" placeholder="終了"></span></label>
+      </div>
+      <div class="actions"><button id="pvRun" class="primary small">解析開始</button><button id="pvCancel" class="small" hidden>中止して結果を見る</button></div>
+      <progress id="pvProg" max="1" value="0" hidden></progress>
+      <p id="pvStatus" class="muted"></p>
+      <div id="pvStage"><video id="pvVideo" playsinline muted></video><canvas id="pvOverlay"></canvas></div>
+      <div id="pvResult" hidden>
+        <h3>作成結果</h3>
+        <table id="pvTable"></table>
+        <p id="pvNote" class="muted"></p>
+        <div class="actions"><button id="pvSave" class="primary small">保存して使用する</button><button id="pvDiscard" class="small">破棄</button></div>
+      </div>
+
+      <h3>プリセットの読み込み</h3>
+      <label class="field">書き出した JSON<input type="file" id="presetImport" accept="application/json,.json"></label>
+    </section>
+
+    <!-- 設定 -->
+    <section id="tab-settings" class="tab">
+      <h2>設定</h2>
+      <label class="field">利き手
+        <select id="hand"><option value="right">右投げ</option><option value="left">左投げ</option></select>
+      </label>
+      <label class="field">撮影位置
+        <select id="view"><option value="side">真横から</option><option value="rear">真後ろから</option></select>
+      </label>
+      <label class="field">利用場所
+        <select id="mode"><option value="home">自宅(ひとりで練習)</option><option value="alley">ボウリング場(レーン前の人だけ)</option></select>
+      </label>
+      <label class="field check"><input type="checkbox" id="voice"> 音声でフィードバック</label>
+      <h3>判定基準の調整</h3>
+      <p class="muted">肉眼の判断と、アプリの判定が合わないときに使います。①投球の結果画面(または履歴の詳細)で、重点項目の「悪い / 問題なし」を肉眼で判断して押す → ②数投ぶんたまったら、下のボタンで境目を提案・適用します。数値を直接変えることもできます。</p>
+      <div id="suggestBox"></div>
+      <p id="rangeMsg" class="muted pre"></p>
+      <details><summary>各指標の「良い範囲」を直接変更(空欄は初期値)</summary>
+        <div id="rangeBox"></div>
+        <div class="actions"><button id="rangeReset" class="small danger">すべて初期値に戻す</button></div>
+      </details>
+      <h3>直したい点(重点項目)</h3>
+      <div id="focusBox"></div>
+      <label class="field">AIへの追加指示(自由記述)
+        <textarea id="focusText" rows="3" placeholder="例: ボールを背負う癖と、投球時の体からの離れ具合を特に指摘してほしい"></textarea>
+      </label>
+      <p class="muted">選んだ項目は、毎回、画面・音声・AIの講評で最優先で扱います。「体からの離れ」は後方撮影でのみ数値で判定できます。自由記述はAIの講評の方針として使われます(数値の判定や音声の定型文には影響しません)。</p>
+      <label class="field check"><input type="checkbox" id="ai"> AIで詳細分析 (Google Gemini)</label>
+      <label class="field">Gemini APIキー
+        <input type="password" id="geminiKey" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
+      <label class="field">モデル
+        <input id="model" list="models" autocapitalize="off" spellcheck="false">
+        <datalist id="models">
+          <option value="gemini-2.5-flash"></option>
+          <option value="gemini-2.5-flash-lite"></option>
+          <option value="gemini-2.5-pro"></option>
+        </datalist>
+      </label>
+      <p class="muted">APIキーは <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> で無料で発行できます。キーはこのブラウザ(localStorage)にのみ保存され、分析時に Google の API へ直接送信されます。投球フレーム画像(4枚)と計測値が送信されます。無料枠の入力は Google の製品改善に使われる場合があります。</p>
+      <p class="muted">動画と分析結果はこの端末のブラウザ内(IndexedDB)に保存されます。ブラウザのサイトデータを消すと消えます。</p>
+    </section>
+  </main>
+
+  <!-- 履歴の詳細 -->
+  <div id="detail" hidden>
+    <div class="detail-inner">
+      <div class="detail-bar"><button id="detailClose" class="small">← 戻る</button><b id="detailTitle"></b></div>
+      <div id="detailStage"><video id="detailVideo" controls playsinline></video><canvas id="detailOverlay"></canvas></div>
+      <label class="field check"><input type="checkbox" id="detailPose" checked> 骨格を重ねて表示(腕が検出できているか確認用)</label>
+      <p id="detailDiag" class="muted"></p>
+      <h3>計測値</h3><div id="detailMetrics"></div>
+      <h3>講評(重点項目を含む)</h3><div id="detailSummary"></div>
+      <h3>直近の投球との比較</h3><div id="detailCmp"></div>
+      <h3>AI分析 <span id="detailModel" class="muted"></span></h3>
+      <p id="detailAi" class="pre"></p>
+      <div class="actions">
+        <button id="reAi" class="small">AIで再分析</button>
+        <button id="speakBtn" class="small">読み上げ</button>
+        <a id="dlBtn" class="btn small">動画を保存</a>
+        <button id="delBtn" class="small danger">削除</button>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <button data-tab="live" class="active">撮影</button>
+    <button data-tab="history">履歴</button>
+    <button data-tab="presets">お手本</button>
+    <button data-tab="settings">設定</button>
+  </nav>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
