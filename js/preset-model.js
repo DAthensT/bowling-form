@@ -5,10 +5,15 @@ const BIG = 1e9;
 
 /**
  * reports: analyze() の戻り値(isValidThrow なもの)の配列。
+ * 測定方式(3D / 2D)が混ざっているときは、3D で測れた投球だけで作る(2D に戻った投球は除外し、excluded に件数を入れる)。
+ * 3D と 2D では値の意味が少し違うので、混ぜて平均しない。3D が1件もなければ 2D の投球で作る。
  * 平均 mean と標準偏差 sd から、良い範囲 = mean ± max(sd, tol)、注意の範囲 = mean ± max(2sd, 2tol)。
  * tol は指標ごとの許容幅の下限(1投球だけでも極端に狭くならないように)。
  */
-export function buildPreset({ name, source = '', view, hand, reports }) {
+export function buildPreset({ name, source = '', view, hand, reports: all }) {
+  const method = all.some(r => r.method === '3d') ? '3d' : '2d';
+  const reports = all.filter(r => (r.method === '3d' ? '3d' : '2d') === method);
+  const excluded = all.length - reports.length;
   const byKey = {};
   for (const r of reports) {
     for (const m of r.metrics) {
@@ -31,7 +36,7 @@ export function buildPreset({ name, source = '', view, hand, reports }) {
   }
   return {
     id: (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2),
-    name, source, view, hand, method: (reports[0] && reports[0].method) || '2d', createdAt: Date.now(), throwsCount: reports.length, stats, ranges
+    name, source, view, hand, method, excluded, createdAt: Date.now(), throwsCount: reports.length, stats, ranges
   };
 }
 

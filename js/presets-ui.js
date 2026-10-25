@@ -93,9 +93,12 @@ export function initPresetsTab({ onChanged }) {
     const rows = describePreset(p).map((r) =>
       `<tr><td>${esc(r.title)}</td><td>${esc(r.mean)}</td><td>${esc(r.sd)}</td><td>${r.n}</td><td>${esc(r.range)}</td></tr>`).join('');
     $('pvTable').innerHTML = `<tr><th>指標</th><th>平均</th><th>ばらつき</th><th>投球数</th><th>良い範囲</th></tr>${rows}`;
-    $('pvNote').textContent = p.throwsCount === 1
+    const parts = [`測定方式: ${p.method === '3d' ? '3D(体の向き基準)' : '2D(画像上。3D 座標を取得できませんでした)'}。`];
+    if (p.excluded) parts.push(`${p.excluded} 件は3D で測れず2D に戻ったため、お手本から除外しました。`);
+    parts.push(p.throwsCount === 1
       ? '投球が1件だけなので、ばらつきは分かりません。許容幅は指標ごとの既定値になります。'
-      : '良い範囲は「平均 ± max(ばらつき, 最小許容幅)」です。';
+      : '良い範囲は「平均 ± max(ばらつき, 最小許容幅)」です。');
+    $('pvNote').textContent = parts.join(' ');
     $('pvResult').hidden = false;
   }
 

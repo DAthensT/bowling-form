@@ -590,4 +590,35 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   assert.equal(selectHistory([rec], { view: 'rear', hand: 'right', method: '3d' }).length, 0);
 }
 
+// お手本も3Dで解析できる: 3D と 2D が混ざった動画では、3D の投球だけでお手本を作る
+{
+  const frames = (yaw, t0) => make3dThrow({ t0, view: 'rear', yawDeg: yaw });
+  const rep3 = (yaw, t0, armOut) => analyze({ frames: make3dThrow({ t0, view: 'rear', yawDeg: yaw, armOut }), hand: 'right', throwStart: t0 + 1.5, view: 'rear' });
+  const rep2 = (yaw, t0) => analyze({ frames: frames(yaw, t0).map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: t0 + 1.5, view: 'rear' });
+  const r3 = [rep3(-20, 800, 0), rep3(0, 820, 0.02), rep3(20, 840, -0.02)];
+  const r2 = rep2(25, 860); // 3D 座標が取れず 2D に戻った投球(進入角度で偏った値になる)
+  assert.ok(r3.every(r => r.method === '3d') && r2.method === '2d');
+
+  const mixed = buildPreset({ name: '混在', view: 'rear', hand: 'right', reports: [...r3, r2] });
+  assert.equal(mixed.method, '3d', 'a 3D preset when any throw was measured in 3D');
+  assert.equal(mixed.throwsCount, 3, 'the 2D throw is left out');
+  assert.equal(mixed.excluded, 1);
+  const only3 = buildPreset({ name: '3Dのみ', view: 'rear', hand: 'right', reports: r3 });
+  assert.equal(mixed.stats.backswingOffset.mean, only3.stats.backswingOffset.mean, '2D value did not pollute the average');
+  assert.ok(Math.abs(mixed.stats.backswingOffset.mean) < 0.1, `3D preset target is near the true 0: ${mixed.stats.backswingOffset.mean}`);
+
+  const only2 = buildPreset({ name: '2Dのみ', view: 'rear', hand: 'right', reports: [rep2(25, 900), rep2(-25, 920)] });
+  assert.equal(only2.method, '2d');
+  assert.equal(only2.excluded, 0);
+
+  // 3D のお手本は、3D の解析にだけ適用され、使われると目標値が出る
+  const applied = analyze({ frames: make3dThrow({ t0: 1000, view: 'rear', yawDeg: 10 }), hand: 'right', throwStart: 1001.5, view: 'rear', preset: mixed });
+  assert.equal(applied.presetSkipped, false);
+  assert.ok(applied.metrics.find(m => m.key === 'backswingOffset').target !== '', 'preset target shown');
+  assert.equal(applied.metrics.find(m => m.key === 'backswingOffset').status, 'good');
+  // 同じお手本を2Dの解析に当てると、適用されない
+  const skipped = analyze({ frames: frames(10, 1100).map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: 1101.5, view: 'rear', preset: mixed });
+  assert.equal(skipped.presetSkipped, true);
+}
+
 console.log('OK');
