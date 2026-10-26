@@ -153,17 +153,23 @@ function fillGaps(samples, keys, maxGap = 0.3) {
  * スイングの構造を決める。
  *  - リリース: 手首が最も低い付近(最大値から 0.3 以内)を「底」としてまとめ、そのあとフォロースルーで腕が上がる(0.5 以上)
  *    最後の底。構えのあとにも腕が一度下がる(振り子の底)ので、全体の最大だけで決めるとそれと取り違える。
+ *  - 探す範囲: 助走が止まった時刻(throwEnd)+0.4秒まで。投球後の腕の動きを取り違えない。
  *  - バックスイング頂点: リリースの直前(1.5秒以内)で最も高い点。
  *    (全体で一番高い点を頂点にすると、リリース後のフォロースルーで腕が高く上がったとき、それを頂点と取り違える)
  */
-function findSwing(s, wy) {
-  const max = Math.max(...wy);
+function findSwing(s, wy, limitT = Infinity) {
+  // リリースは助走の区間にある。投球後の腕の動き(下ろして持ち上げる)を、リリースと取り違えないよう、
+  // limitT(助走の終わり + 余裕)までのフレームで探す。範囲が短すぎるときは制限しない。
+  let lim = wy.length - 1;
+  while (lim > 0 && s[lim].t > limitT) lim--;
+  if (lim < 5) lim = wy.length - 1;
+  const max = Math.max(...wy.slice(0, lim + 1));
   const thr = max - 0.3;
   const clusters = [];
-  for (let i = 0; i < wy.length;) {
+  for (let i = 0; i <= lim;) {
     if (wy[i] < thr) { i++; continue; }
     let j = i, best = i;
-    while (j < wy.length && wy[j] >= thr) { if (wy[j] > wy[best]) best = j; j++; }
+    while (j <= lim && wy[j] >= thr) { if (wy[j] > wy[best]) best = j; j++; }
     clusters.push({ best, end: j - 1 });
     i = j;
   }
@@ -177,6 +183,16 @@ function findSwing(s, wy) {
     if (back < 0 || wy[i] < wy[back]) back = i;
   }
   return { back, rel };
+}
+
+/**
+ * リリースを探す範囲の上限(秒)。検知器が検知した「助走が止まり始めた時刻」+0.4秒。求まらなければ制限しない。
+ * (注意) 後ろから撮った実際の映像では、検知器の「止まり始め」は、実際の停止より大きく遅れることがあり、
+ * 投球後の腕の動きを除く効果は限定的。足首の動きから停止を求める方法も試したが、モデルごとの座標ぶれで安定しなかった。
+ */
+function approachLimit(s, throwStart, throwEnd) {
+  const ok = throwEnd != null && throwEnd >= throwStart + 0.8;
+  return { limit: ok ? throwEnd + 0.4 : Infinity, stop: ok ? throwEnd : null };
 }
 
 /** リリース後の腕を検出できたフレームの数と時間幅(フォロースルーを測れたかの判断・診断用) */
@@ -224,7 +240,7 @@ function armOffset(dom, other, wrist) {
   return ((wrist.x - dom.x) * outward) / width;
 }
 
-function analyzeRear({ frames, hand, throwStart, preset }) {
+function analyzeRear({ frames, hand, throwStart, throwEnd, preset }) {
   const M = (k, v) => metric(k, v, preset);
   const endTime = frames.length ? frames[frames.length - 1].t : throwStart;
   const invalid = (why) => ({
@@ -245,7 +261,8 @@ function analyzeRear({ frames, hand, throwStart, preset }) {
   // 助走中は距離が変わって大きさが変わるので、胴体の長さはフレームごとに正規化する
   const torsoAt = (x) => Math.max(dist(x.shoulderMid, x.hipMid), 0.02);
   const wy = smooth(s.map(x => (x.wrist.y - x.hipMid.y) / torsoAt(x)));
-  const { back, rel } = findSwing(s, wy);
+  const win = approachLimit(s, throwStart, throwEnd);
+  const { back, rel } = findSwing(s, wy, win.limit);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   if (wy[rel] - wy[back] < 1.0 || rel - back < 3) return invalid('投球スイングとして認識できませんでした。');
   // 助走で奥へ遠ざかったか(胴体の見かけの大きさが十分に縮んだか)
@@ -277,7 +294,7 @@ function analyzeRear({ frames, hand, throwStart, preset }) {
 
   return { isValidThrow: true, view: 'rear', metrics, startTime: throwStart, backswingTime: b.t,
     releaseTime: r.t, endTime, summary: summarize(metrics),
-    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured } };
+    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured, stoppedAt: win.stop, searchLimit: Number.isFinite(win.limit) ? win.limit : null } };
 }
 
 /** 全体の講評。exclude に指定した指標(重点項目で扱い済み)は除く。 */
@@ -290,7 +307,7 @@ export function summarize(metrics, exclude = []) {
   return issues.map(m => m.advice).join(' ');
 }
 
-function analyzeSide({ frames, hand, throwStart, preset }) {
+function analyzeSide({ frames, hand, throwStart, throwEnd, preset }) {
   const M = (k, v) => metric(k, v, preset);
   const endTime = frames.length ? frames[frames.length - 1].t : throwStart;
   const invalid = (why) => ({
@@ -305,7 +322,8 @@ function analyzeSide({ frames, hand, throwStart, preset }) {
 
   // 腰を基準にした手首の高さ(下向きが正、胴体長で正規化)
   const wy = smooth(s.map(x => (x.wrist.y - x.hipMid.y) / torso));
-  const { back, rel } = findSwing(s, wy);
+  const win = approachLimit(s, throwStart, throwEnd);
+  const { back, rel } = findSwing(s, wy, win.limit);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   if (wy[rel] - wy[back] < 1.0 || rel - back < 3) return invalid('投球スイングとして認識できませんでした。');
   // 助走で横方向に胴体の長さ以上動いたか
@@ -334,7 +352,7 @@ function analyzeSide({ frames, hand, throwStart, preset }) {
   return {
     isValidThrow: true, view: 'side', metrics, startTime: throwStart, backswingTime: s[back].t,
     releaseTime: s[rel].t, endTime, summary: summarize(metrics),
-    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured }
+    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured, stoppedAt: win.stop, searchLimit: Number.isFinite(win.limit) ? win.limit : null }
   };
 }
 
@@ -356,7 +374,7 @@ function median(a) {
  * 体の座標系(lat/fwd/up)で測る。カメラに対する体の向きによるずれが入らない。
  * 3D が足りない/スイングを検出できないときは null か無効な結果を返し、呼び出し側が2Dに切り替える。
  */
-function analyzeBody({ frames, hand, throwStart, view, preset }) {
+function analyzeBody({ frames, hand, throwStart, throwEnd, view, preset }) {
   const M = (k, v) => metric(k, v, preset);
   const c = CHAIN[hand];
   const sgn = hand === 'right' ? 1 : -1; // 投球腕の「体の外側」= 右投げは +lat、左投げは -lat
@@ -387,7 +405,8 @@ function analyzeBody({ frames, hand, throwStart, view, preset }) {
 
   // 腰を基準にした手首の高さ(下向きが正、胴体長で正規化) — 2D と同じ向きの定義
   const wy = smooth(s.map((x, i) => -x.wrist.up / torso3[i]));
-  const { back, rel } = findSwing(s, wy);
+  const win = approachLimit(s, throwStart, throwEnd);
+  const { back, rel } = findSwing(s, wy, win.limit);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   if (wy[rel] - wy[back] < 1.0 || rel - back < 3) return invalid('投球スイングとして認識できませんでした。');
 
@@ -446,7 +465,7 @@ function analyzeBody({ frames, hand, throwStart, view, preset }) {
   return {
     isValidThrow: true, view, method: '3d', metrics, startTime: throwStart, backswingTime: s[back].t,
     releaseTime: s[rel].t, endTime, summary: summarize(metrics),
-    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured }
+    diag: { samples: s.length, interpolated: s.filter(x => x.interp).length, afterRelease: after.n, afterSpan: after.span, followMeasured, stoppedAt: win.stop, searchLimit: Number.isFinite(win.limit) ? win.limit : null }
   };
 }
 
@@ -470,22 +489,22 @@ function presetFor(method, preset) {
  * 解析の入口。3D(体の向き基準)で測れるときは3D、測れないとき(3D 座標が足りない・3D でスイングを検出できない)は
  * 従来の2D(画像上)で測る。report.method に使った方式が入る。
  */
-export function analyze({ frames, hand, throwStart, view = 'side', preset = null }) {
+export function analyze({ frames, hand, throwStart, throwEnd = null, view = 'side', preset = null }) {
   const notes = [];
   let report = null;
   let skipped = false;
   const world = hasWorld(frames);
   if (world) {
     const p3 = presetFor('3d', preset);
-    const body = analyzeBody({ frames, hand, throwStart, view, preset: p3.preset });
+    const body = analyzeBody({ frames, hand, throwStart, throwEnd, view, preset: p3.preset });
     if (body && body.isValidThrow) { report = body; skipped = p3.skipped; }
     else notes.push('3D(体の向き基準)で測れなかったため、画像上の2D方式で測定しました。');
   }
   if (!report) {
     const p2 = presetFor('2d', preset);
     report = view === 'rear'
-      ? analyzeRear({ frames, hand, throwStart, preset: p2.preset })
-      : analyzeSide({ frames, hand, throwStart, preset: p2.preset });
+      ? analyzeRear({ frames, hand, throwStart, throwEnd, preset: p2.preset })
+      : analyzeSide({ frames, hand, throwStart, throwEnd, preset: p2.preset });
     report.method = '2d';
     skipped = p2.skipped;
   }

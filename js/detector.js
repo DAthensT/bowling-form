@@ -61,7 +61,7 @@ export class ThrowDetector {
 
   get isActive() { return this.activeStart !== null; }
 
-  /** 戻り値: {type:'started', at} | {type:'ended', at} | null */
+  /** 戻り値: {type:'started', at} | {type:'ended', at, stoppedAt} | null */
   process(frame, t) {
     return this.view === 'rear' ? this.#processRear(frame, t) : this.#processSide(frame, t);
   }
@@ -134,11 +134,13 @@ export class ThrowDetector {
   }
 
   #end(t) {
+    // 終了は「止まった状態が endHold 秒続いたら」で判定するので、実際に止まり始めたのはその少し前(belowSince)
+    const stoppedAt = this.belowSince === null ? t : this.belowSince;
     this.activeStart = null;
     this.belowSince = null;
     this.aboveSince = null;
     this.cooldownUntil = t + this.config.cooldown;
-    return { type: 'ended', at: t };
+    return { type: 'ended', at: t, stoppedAt };
   }
 
   #center(f) {

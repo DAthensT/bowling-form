@@ -47,7 +47,7 @@ export async function analyzeVideo({ video, file, view, hand, rate = 0.5, from =
         while (pending.length && upTo >= pending[0].end + POST_ROLL) {
           const p = pending.shift();
           const frames = history.filter(f => f.t >= p.start - PRE_ROLL && f.t <= p.end + POST_ROLL);
-          const report = analyze({ frames, hand, throwStart: p.start, view });
+          const report = analyze({ frames, hand, throwStart: p.start, throwEnd: p.stopped, view });
           if (report.isValidThrow) { reports.push(report); if (onThrow) onThrow(report, reports.length); }
         }
       };
@@ -71,7 +71,7 @@ export async function analyzeVideo({ video, file, view, hand, rate = 0.5, from =
             if (onProgress) onProgress(Math.min(1, (t - from) / Math.max(end - from, 0.001)));
             const ev = detector.process(frame, t);
             if (ev && ev.type === 'started') started = ev.at;
-            else if (ev && ev.type === 'ended' && started !== null) { pending.push({ start: started, end: ev.at }); started = null; }
+            else if (ev && ev.type === 'ended' && started !== null) { pending.push({ start: started, end: ev.at, stopped: ev.stoppedAt }); started = null; }
             flush(t);
           }
           video.requestVideoFrameCallback(step);

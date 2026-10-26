@@ -431,7 +431,7 @@ const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a
  * view: 'rear' | 'side'。yawDeg: 体の進行方向が、カメラの基準の向き(後方=レーン方向 / 横=画面の左右)からずれている角度。
  * armOut: 投球腕の、肩に対する「体の外側」への真の横ずれ(m)。0 = 肩の真後ろ・真下を通る。負 = 内側(背負い)。
  */
-function make3dThrow({ t0, view, yawDeg, hand = 'right', armOut = 0, leanDeg = 25, noise2 = 0, noise3 = 0, seed = 1, withWorld = true }) {
+function make3dThrow({ t0, view, yawDeg, hand = 'right', armOut = 0, leanDeg = 25, noise2 = 0, noise3 = 0, seed = 1, withWorld = true, postSwing = false }) {
   const R = rng(seed), psi = (yawDeg * Math.PI) / 180, sg = hand === 'right' ? 1 : -1;
   const F = view === 'rear' ? [Math.sin(psi), 0, Math.cos(psi)] : [Math.cos(psi), 0, Math.sin(psi)];
   const U = [0, -1, 0];
@@ -450,7 +450,11 @@ function make3dThrow({ t0, view, yawDeg, hand = 'right', armOut = 0, leanDeg = 2
       const p = (s - 1.5) / 2.2;
       walk = 4 * p * (2 - p);
       phi = p < 0.5 ? 60 + (-105 - 60) * (p / 0.5) : p < 0.85 ? -105 + 105 * ((p - 0.5) / 0.35) : 0 + 140 * ((p - 0.85) / 0.15);
-    } else { walk = 4; phi = 140; }
+    } else {
+      walk = 4; phi = 140;
+      // 投球のあと、腕を下ろして(底)、また持ち上げる。実際の映像では、フィニッシュのあとにこの動きがある
+      if (postSwing && s > 4.3) phi = s < 4.9 ? 140 + (5 - 140) * ((s - 4.3) / 0.6) : s < 5.6 ? 5 + (75 - 5) * ((s - 4.9) / 0.7) : 75;
+    }
     const ph = (phi * Math.PI) / 180;
     const domLat = sg * 0.2;
     const wristLat = domLat + sg * armOut;
@@ -619,6 +623,39 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   // 同じお手本を2Dの解析に当てると、適用されない
   const skipped = analyze({ frames: frames(10, 1100).map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: 1101.5, view: 'rear', preset: mixed });
   assert.equal(skipped.presetSkipped, true);
+}
+
+// ---------------------------------------------------------------- リリースを探す範囲(助走の区間)
+{
+  // 投球のあとに腕を下ろして持ち上げる動きがあっても、リリースを取り違えない(助走の終わりまでで探す)
+  const t0 = 3000;
+  const frames = make3dThrow({ t0, view: 'rear', yawDeg: 0, postSwing: true });
+  const releaseTrue = t0 + 1.5 + 2.2 * 0.85; // 合成データのリリース(p = 0.85)
+  const lateBottom = t0 + 4.9;                  // 投球後の「底」
+  const det = new ThrowDetector({ view: 'rear' });
+  let evStart = null, evEnd = null, evStop = null;
+  for (const f of frames) { const ev = det.process(f, f.t); if (ev && ev.type === 'started') evStart = ev.at; if (ev && ev.type === 'ended') { evEnd = ev.at; evStop = ev.stoppedAt; } }
+  console.log('window: start', (evStart - t0).toFixed(2), 'stopped', (evStop - t0).toFixed(2), 'confirmed end', (evEnd - t0).toFixed(2));
+  assert.ok(evStop <= evEnd && evStop > evStart, 'stoppedAt is between the start and the confirmed end')
+  assert.ok(evStart !== null && evEnd !== null, 'the detector finds the approach window');
+
+  // 検知器の「止まり始め」で範囲を限ると、投球後の動きをリリースと取り違えない
+  const unguarded = analyze({ frames, hand: 'right', throwStart: evStart, view: 'rear' });
+  assert.ok(Math.abs(unguarded.releaseTime - lateBottom) < 0.4, `without a window the late bottom wins (known weakness): ${unguarded.releaseTime - t0}`);
+  const fixed = analyze({ frames, hand: 'right', throwStart: evStart, throwEnd: evStop, view: 'rear' });
+  assert.ok(fixed.isValidThrow && fixed.method === '3d', fixed.summary);
+  assert.ok(Math.abs(fixed.releaseTime - releaseTrue) < 0.3, `release at ${fixed.releaseTime - t0}, expected ~${releaseTrue - t0}`);
+  assert.ok(fixed.releaseTime < lateBottom - 0.5, 'not the late bottom');
+  // リリース後の腕(フォロースルー)は、助走の終わりより後のフレームも使って測れる
+  assert.ok(fixed.metrics.some(m => m.key === 'followThrough'), 'follow-through is still measured from frames after the window');
+
+  // 2D でも同じ
+  const two = analyze({ frames: frames.map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: evStart, throwEnd: evStop, view: 'rear' });
+  assert.ok(two.isValidThrow && Math.abs(two.releaseTime - releaseTrue) < 0.3, `2D release ${two.releaseTime - t0}`);
+
+  // 範囲が短すぎる/おかしいときは、制限を無視する(投球を落とさない)
+  const bad = analyze({ frames, hand: 'right', throwStart: evStart, throwEnd: t0 + 0.1, view: 'rear' });
+  assert.ok(bad.isValidThrow, 'a bogus window does not break the analysis');
 }
 
 console.log('OK');

@@ -33,6 +33,7 @@ let lastSnap = 0;
 let lastHud = 0;
 let state = 'idle';      // idle | recording | analyzing
 let detectedStart = 0;
+let detectedEnd = null;  // 助走の終わり(検知器が終了を検知した時刻)。リリースを探す範囲の上限に使う
 let lastRecord = null;   // 撮影タブに表示中の直近の投球
 let openRecord = null;   // 履歴の詳細画面に表示中の投球
 let activePreset = null; // 使用中のお手本プリセット(現在の撮影位置と一致するもののみ)
@@ -228,7 +229,7 @@ function onFrame(raw, t) {
 
   const ev = detector.process(frame, t);
   if (ev && ev.type === 'started') onStarted(ev.at);
-  else if (ev && ev.type === 'ended') onEnded(ev.at);
+  else if (ev && ev.type === 'ended') onEnded(ev);
 
   if (t - lastHud > 0.15) {
     lastHud = t;
@@ -306,13 +307,16 @@ function setMessage(text) { $('message').textContent = text; }
 
 function onStarted(at) {
   detectedStart = at;
+  detectedEnd = null;
   const vs = recorder ? recorder.lock(at - PRE_ROLL) : null;
   if (vs === null) { setState('idle', '録画を開始できませんでした'); return; }
   setState('recording', '投球を検知: 録画中');
 }
 
-function onEnded(at) {
+function onEnded(ev) {
+  const at = ev.at;
   if (state !== 'recording') return;
+  detectedEnd = ev.stoppedAt ?? at;
   setState('analyzing', '投球終了: 解析中');
   setTimeout(() => finishThrow(at + POST_ROLL), POST_ROLL * 1000);
 }
@@ -322,7 +326,7 @@ async function finishThrow(endAt) {
     const rec = recorder ? await recorder.finish() : null;
     if (!rec) { setState('idle', '録画を保存できませんでした'); return; }
     const frames = history.filter((f) => f.t >= rec.videoStart && f.t <= endAt);
-    const report = analyze({ frames, hand: hand(), throwStart: detectedStart, view: detector.view, preset: activePreset });
+    const report = analyze({ frames, hand: hand(), throwStart: detectedStart, throwEnd: detectedEnd, view: detector.view, preset: activePreset });
     report.presetName = activePreset && !report.presetSkipped ? activePreset.name : '';
     if (!report.isValidThrow) { setState('idle', '投球として認識できず破棄: ' + report.summary); return; }
 
