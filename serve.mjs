@@ -35,8 +35,7 @@ function serveStatic(req, res) {
   // このサーバーはローカル版(開発機能あり)。js/edition.js を 'local' に差し替えて返す(リポジトリ上のファイルは 'public' のまま)
   if (decodeURIComponent(url.pathname) === '/js/edition.js') {
     res.writeHead(200, { 'Content-Type': types['.js'], 'Cache-Control': 'no-cache' });
-    res.end("export const EDITION = 'local';
-");
+    res.end("export const EDITION = 'local';");
     return;
   }
   let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
