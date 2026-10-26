@@ -2,6 +2,7 @@
 //   node web/serve.mjs
 // 証明書は mkcert で作成したものを使う。リポジトリには置かず、環境変数 BF_CERT_DIR (既定: ~/.bowlingform-certs) から読む。
 //   - HTTPS (既定 8443): アプリ本体
+//   - 動画の受け取り: /inbox/ (inbox.mjs。PC での詳細分析用。保存先 BF_INBOX、既定 ~/BowlingFormInbox)
 //   - HTTP  (既定 8080): iPhone にルート証明書(CA の公開証明書のみ)を入れるための配布用。アプリは配信しない。
 import https from 'node:https';
 import http from 'node:http';
@@ -9,11 +10,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createInbox, loadOrCreateToken } from './inbox.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const certDir = process.env.BF_CERT_DIR || path.join(os.homedir(), '.bowlingform-certs');
 const httpsPort = Number(process.env.BF_HTTPS_PORT || 8443);
 const httpPort = Number(process.env.BF_HTTP_PORT || 8080);
+// 撮影した動画をアプリから受け取る窓口(PC での詳細分析用)。保存先と送信キー(初回に自動生成)
+const inboxDir = process.env.BF_INBOX || path.join(os.homedir(), 'BowlingFormInbox');
+const inboxToken = loadOrCreateToken(inboxDir);
+const inbox = createInbox({ dir: inboxDir, token: inboxToken });
 const caFile = process.env.BF_CA_FILE || path.join(process.env.LOCALAPPDATA || '', 'mkcert', 'rootCA.pem');
 
 const types = {
@@ -24,6 +30,7 @@ const types = {
 const allowedTop = new Set(['index.html', 'style.css', 'manifest.webmanifest', 'js']);
 
 function serveStatic(req, res) {
+  if (inbox.handle(req, res)) return;
   const url = new URL(req.url, 'http://x');
   let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
   const top = rel.split('/')[0];
@@ -66,5 +73,7 @@ http.createServer((req, res) => {
   }
 }).listen(httpPort, '0.0.0.0');
 
+console.log(`動画の受け取り先: ${inboxDir}`);
+console.log(`PC送信キー(アプリで初回に入力): ${inboxToken}`);
 const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
 for (const ip of ips) console.log(`https://${ip}:${httpsPort}/   (証明書の配布: http://${ip}:${httpPort}/)`);

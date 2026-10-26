@@ -537,10 +537,64 @@ function loopDetail() {
   }
   detailRaf = requestAnimationFrame(loopDetail);
 }
+// ---------------------------------------------------------------- PC へ送信(詳細分析用)
+
+let pcInbox = null; // null = 未確認 / true = 送信できる(PC のローカルサーバーから開いている) / false = できない
+async function checkInbox() {
+  if (pcInbox !== null) return pcInbox;
+  try {
+    const r = await fetch('inbox/ping', { cache: 'no-store' });
+    const j = r.ok ? await r.json() : null;
+    pcInbox = !!(j && j.name === 'bowlingform-inbox');
+  } catch { pcInbox = false; }
+  return pcInbox;
+}
+
+/** PC 側の解析ツールに渡す付随情報 */
+function buildMeta(r) {
+  return {
+    schema: 1, id: r.id, date: r.date, view: r.view || 'side', hand: r.hand, mime: r.mime,
+    videoStart: r.videoStart, trimStart: r.trimStart, presetName: r.presetName || '',
+    report: r.report, poses: r.poses || null
+  };
+}
+
+async function sendToPc(r) {
+  const status = (t) => { $('sendStatus').textContent = t; };
+  let token = settings.get('inboxToken', '');
+  if (!token) {
+    token = (prompt('PC送信キーを入力してください(PC で node serve.mjs を起動したときに表示される24文字。初回のみ)') || '').trim();
+    if (!token) { status('送信をやめました'); return; }
+    settings.set('inboxToken', token);
+  }
+  $('sendPc').disabled = true;
+  try {
+    status('付随情報を送信中…');
+    let res = await fetch(`inbox/${r.id}/meta`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Inbox-Token': token }, body: JSON.stringify(buildMeta(r))
+    });
+    if (res.status === 401) { settings.set('inboxToken', ''); status('送信キーが違います。もう一度「PCへ送信」を押して、入力し直してください'); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    status('動画を送信中…');
+    res = await fetch(`inbox/${r.id}/video`, {
+      method: 'PUT', headers: { 'Content-Type': r.video.type || r.mime || 'video/mp4', 'X-Inbox-Token': token }, body: r.video
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    status('PC へ送信しました(PC の BowlingFormInbox フォルダ)');
+  } catch (e) {
+    status('送信に失敗しました: ' + e.message);
+  } finally {
+    $('sendPc').disabled = false;
+  }
+}
+
 async function openDetail(id) {
   const r = await getThrow(id);
   if (!r) return;
   openRecord = r;
+  $('sendStatus').textContent = '';
+  $('sendPc').hidden = true;
+  checkInbox().then((ok) => { if (openRecord && openRecord.id === r.id) $('sendPc').hidden = !ok; });
   $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
   $('detailMetrics').innerHTML = r.report.metrics.map((m) =>
     metricRow(m) + (m.advice ? `<p class="advice">${esc(m.advice)}</p>` : '')).join('');
@@ -591,6 +645,7 @@ function closeDetail() {
 }
 
 $('detailClose').addEventListener('click', closeDetail);
+$('sendPc').addEventListener('click', () => { if (openRecord) sendToPc(openRecord); });
 $('reAi').addEventListener('click', () => { if (openRecord) runAI(openRecord); });
 $('speakBtn').addEventListener('click', () => {
   if (!openRecord) return;

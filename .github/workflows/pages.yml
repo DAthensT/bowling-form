@@ -24,6 +24,8 @@ jobs:
           node-version: 20
       - name: Detector / analyzer simulation
         run: node test/sim.mjs
+      - name: Inbox (video upload) server
+        run: node test/inbox.mjs
 
   deploy:
     needs: test
