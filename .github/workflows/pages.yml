@@ -26,6 +26,8 @@ jobs:
         run: node test/sim.mjs
       - name: Inbox (video upload) server
         run: node test/inbox.mjs
+      - name: Edition split (public vs local)
+        run: node test/editions.mjs
 
   deploy:
     needs: test
@@ -36,10 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - name: Stage site (without tests and the local server)
+      - name: Stage site (public edition only: no tests, no local server, no js/local)
         run: |
           mkdir _site
           cp -R index.html style.css manifest.webmanifest js _site/
+          rm -rf _site/js/local
+      - name: Verify the staged site is the public edition
+        run: node test/editions.mjs _site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

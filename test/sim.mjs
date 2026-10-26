@@ -7,7 +7,7 @@ import { metric, summarize, measurementMethod } from '../js/analyzer.js';
 import { whyNotPlausible } from '../js/presence.js';
 import { focusItems, focusSummary, focusKeys, DEFAULT_FOCUS, FOCUS_OPTIONS } from '../js/focus.js';
 import { PresenceFilter, isPlausiblePerson } from '../js/presence.js';
-import { localDay, pendingForDay, daysWithCounts } from '../js/day.js';
+import { localDay, pendingForDay, daysWithCounts } from '../js/local/day.js';
 import { hipAxis, smoothAxes, toBody, angle3 } from '../js/body3d.js';
 import { buildPreset, describePreset, validatePreset } from '../js/preset-model.js';
 

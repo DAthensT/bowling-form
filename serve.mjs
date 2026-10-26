@@ -32,6 +32,13 @@ const allowedTop = new Set(['index.html', 'style.css', 'manifest.webmanifest', '
 function serveStatic(req, res) {
   if (inbox.handle(req, res)) return;
   const url = new URL(req.url, 'http://x');
+  // このサーバーはローカル版(開発機能あり)。js/edition.js を 'local' に差し替えて返す(リポジトリ上のファイルは 'public' のまま)
+  if (decodeURIComponent(url.pathname) === '/js/edition.js') {
+    res.writeHead(200, { 'Content-Type': types['.js'], 'Cache-Control': 'no-cache' });
+    res.end("export const EDITION = 'local';
+");
+    return;
+  }
   let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
   const top = rel.split('/')[0];
   const file = path.resolve(root, rel);
