@@ -57,6 +57,13 @@
     <!-- 履歴 -->
     <section id="tab-history" class="tab">
       <h2>履歴</h2>
+      <div id="bulkBox" class="note" hidden>
+        <b>PC へまとめて送信(その日のレポート用)</b>
+        <label class="field">日付 <input type="date" id="bulkDay"></label>
+        <label class="field check"><input type="checkbox" id="bulkResend"> 送信済みも、もう一度送る</label>
+        <div class="actions"><button id="bulkSend" class="small primary">この日の投球をまとめて送信</button></div>
+        <p id="bulkStatus" class="muted"></p>
+      </div>
       <div id="historyList"></div>
     </section>
 

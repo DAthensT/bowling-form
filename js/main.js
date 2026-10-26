@@ -8,6 +8,7 @@ import { putThrow, removeThrow, getThrow, allThrows, allPresets, getPreset, sett
 import { initPresetsTab } from './presets-ui.js';
 import { PresenceFilter } from './presence.js';
 import { compare, selectHistory } from './trend.js';
+import { localDay, pendingForDay, daysWithCounts } from './day.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
@@ -490,10 +491,16 @@ const METHOD_TAG = { '3d': '3D', '2d': '2D', legacy: '2D旧' };
 async function renderHistory() {
   const list = $('historyList');
   const items = await allThrows();
+  // まとめて送信: PC のローカルサーバーから開いているときだけ出す。日付は、投球のある最新の日を初期値にする
+  checkInbox().then((ok) => {
+    $('bulkBox').hidden = !ok;
+    if (ok && !$('bulkDay').value) $('bulkDay').value = (daysWithCounts(items)[0] || { day: localDay(new Date()) }).day;
+  });
   if (!items.length) { list.innerHTML = '<p class="muted">まだ投球がありません</p>'; return; }
   list.innerHTML = items.map((r) =>
     `<div class="item" data-id="${r.id}"><b>${new Date(r.date).toLocaleString('ja-JP')}${r.view === 'rear' ? '(後方)' : ''}${r.aiStatus === 'done' ? ' ✨' : ''}` +
-    `<span class="tag ${measurementMethod(r.report) === '3d' ? 'm3d' : ''}">${METHOD_TAG[measurementMethod(r.report)]}</span></b>` +
+    `<span class="tag ${measurementMethod(r.report) === '3d' ? 'm3d' : ''}">${METHOD_TAG[measurementMethod(r.report)]}</span>` +
+    `${r.sentToPcAt ? '<span class="tag">PC済</span>' : ''}</b>` +
     `<span>${esc(r.summary)}</span></div>`).join('');
   list.querySelectorAll('.item').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.id)));
 }
@@ -557,39 +564,77 @@ async function checkInbox() {
 /** PC 側の解析ツールに渡す付随情報 */
 function buildMeta(r) {
   return {
-    schema: 1, id: r.id, date: r.date, view: r.view || 'side', hand: r.hand, mime: r.mime,
+    schema: 1, id: r.id, date: r.date, day: localDay(r.date), view: r.view || 'side', hand: r.hand, mime: r.mime,
     videoStart: r.videoStart, trimStart: r.trimStart, presetName: r.presetName || '',
     report: r.report, poses: r.poses || null
   };
 }
 
-async function sendToPc(r) {
-  const status = (t) => { $('sendStatus').textContent = t; };
+/** 送信キー(初回だけ入力)。入力されなければ null */
+function inboxToken() {
   let token = settings.get('inboxToken', '');
   if (!token) {
     token = (prompt('PC送信キーを入力してください(PC で node serve.mjs を起動したときに表示される24文字。初回のみ)') || '').trim();
-    if (!token) { status('送信をやめました'); return; }
+    if (!token) return null;
     settings.set('inboxToken', token);
   }
-  $('sendPc').disabled = true;
+  return token;
+}
+
+/** 1件を PC へ送る。戻り値: {ok} | {ok:false, unauthorized:true} | {ok:false, error} */
+async function uploadRecord(r, token) {
   try {
-    status('付随情報を送信中…');
     let res = await fetch(`inbox/${r.id}/meta`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Inbox-Token': token }, body: JSON.stringify(buildMeta(r))
     });
-    if (res.status === 401) { settings.set('inboxToken', ''); status('送信キーが違います。もう一度「PCへ送信」を押して、入力し直してください'); return; }
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    status('動画を送信中…');
+    if (res.status === 401) return { ok: false, unauthorized: true };
+    if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
     res = await fetch(`inbox/${r.id}/video`, {
       method: 'PUT', headers: { 'Content-Type': r.video.type || r.mime || 'video/mp4', 'X-Inbox-Token': token }, body: r.video
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    status('PC へ送信しました(PC の BowlingFormInbox フォルダ)');
+    if (res.status === 401) return { ok: false, unauthorized: true };
+    if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
+    r.sentToPcAt = Date.now();
+    await putThrow(r);
+    return { ok: true };
   } catch (e) {
-    status('送信に失敗しました: ' + e.message);
-  } finally {
-    $('sendPc').disabled = false;
+    return { ok: false, error: e.message };
   }
+}
+
+async function sendToPc(r) {
+  const status = (t) => { $('sendStatus').textContent = t; };
+  const token = inboxToken();
+  if (!token) { status('送信をやめました'); return; }
+  $('sendPc').disabled = true;
+  status('PC へ送信中…');
+  const res = await uploadRecord(r, token);
+  if (res.ok) status('PC へ送信しました(PC の BowlingFormInbox フォルダ)');
+  else if (res.unauthorized) { settings.set('inboxToken', ''); status('送信キーが違います。もう一度「PCへ送信」を押して、入力し直してください'); }
+  else status('送信に失敗しました: ' + res.error);
+  $('sendPc').disabled = false;
+}
+
+/** その日の投球を、まとめて PC へ送る(PC 側で、その日のレポートを作る) */
+async function bulkSend() {
+  const status = (t) => { $('bulkStatus').textContent = t; };
+  const day = $('bulkDay').value || localDay(new Date());
+  const targets = pendingForDay(await allThrows(), day, $('bulkResend').checked);
+  if (!targets.length) { status(`${day} に、送る投球がありません(送信済みは除いています)`); return; }
+  const token = inboxToken();
+  if (!token) { status('送信をやめました'); return; }
+  $('bulkSend').disabled = true;
+  let done = 0;
+  for (const r of targets) {
+    status(`送信中 ${done + 1}/${targets.length}(${new Date(r.date).toLocaleTimeString('ja-JP')})…`);
+    const res = await uploadRecord(r, token);
+    if (res.unauthorized) { settings.set('inboxToken', ''); status(`送信キーが違います(${done}件は送信済み)。もう一度押して、入力し直してください`); $('bulkSend').disabled = false; return; }
+    if (!res.ok) { status(`${done + 1} 件目で失敗しました: ${res.error}(${done}件は送信済み。もう一度押すと、続きから送ります)`); $('bulkSend').disabled = false; return; }
+    done += 1;
+  }
+  status(`${day} の ${done} 件を PC へ送信しました。PC で、その日のレポートを作れます。`);
+  $('bulkSend').disabled = false;
+  renderHistory();
 }
 
 async function openDetail(id) {
@@ -650,6 +695,7 @@ function closeDetail() {
 
 $('detailClose').addEventListener('click', closeDetail);
 $('sendPc').addEventListener('click', () => { if (openRecord) sendToPc(openRecord); });
+$('bulkSend').addEventListener('click', bulkSend);
 $('reAi').addEventListener('click', () => { if (openRecord) runAI(openRecord); });
 $('speakBtn').addEventListener('click', () => {
   if (!openRecord) return;

@@ -7,6 +7,7 @@ import { metric, summarize, measurementMethod } from '../js/analyzer.js';
 import { whyNotPlausible } from '../js/presence.js';
 import { focusItems, focusSummary, focusKeys, DEFAULT_FOCUS, FOCUS_OPTIONS } from '../js/focus.js';
 import { PresenceFilter, isPlausiblePerson } from '../js/presence.js';
+import { localDay, pendingForDay, daysWithCounts } from '../js/day.js';
 import { hipAxis, smoothAxes, toBody, angle3 } from '../js/body3d.js';
 import { buildPreset, describePreset, validatePreset } from '../js/preset-model.js';
 
@@ -656,6 +657,55 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   // 範囲が短すぎる/おかしいときは、制限を無視する(投球を落とさない)
   const bad = analyze({ frames, hand: 'right', throwStart: evStart, throwEnd: t0 + 0.1, view: 'rear' });
   assert.ok(bad.isValidThrow, 'a bogus window does not break the analysis');
+}
+
+// ---------------------------------------------------------------- その日の投球をまとめて送る
+{
+  // 日付は端末のローカル時刻で数える(UTC ではない)
+  assert.equal(localDay(new Date(2026, 9, 25, 23, 59)), '2026-10-25');
+  assert.equal(localDay(new Date(2026, 9, 26, 0, 1)), '2026-10-26');
+  assert.equal(localDay(new Date(2026, 0, 5, 12)), '2026-01-05', 'month and day are zero-padded');
+  assert.equal(localDay(new Date(2026, 9, 25, 12).getTime()), '2026-10-25', 'a timestamp works too');
+
+  const at = (d, h, m) => new Date(2026, 9, d, h, m).getTime();
+  const recs = [
+    { id: 'c', date: at(25, 21, 12) }, { id: 'a', date: at(25, 21, 3), sentToPcAt: 1 }, { id: 'b', date: at(25, 21, 5) },
+    { id: 'z', date: at(24, 10, 0) }, { id: 'n', date: at(26, 9, 0) }
+  ];
+  assert.deepEqual(pendingForDay(recs, '2026-10-25').map(r => r.id), ['b', 'c'], 'sent ones are skipped, oldest first');
+  assert.deepEqual(pendingForDay(recs, '2026-10-25', true).map(r => r.id), ['a', 'b', 'c'], 'resend includes sent ones');
+  assert.deepEqual(pendingForDay(recs, '2026-10-27'), []);
+  assert.deepEqual(daysWithCounts(recs), [
+    { day: '2026-10-26', count: 1, unsent: 1 }, { day: '2026-10-25', count: 3, unsent: 2 }, { day: '2026-10-24', count: 1, unsent: 1 }
+  ]);
+}
+
+// ---------------------------------------------------------------- 人が指定した局面(頂点・リリース)
+{
+  const t0 = 4000;
+  const frames = make3dThrow({ t0, view: 'rear', yawDeg: 0, postSwing: true });
+  const releaseTrue = t0 + 1.5 + 2.2 * 0.85;
+  const backTrue = t0 + 1.5 + 2.2 * 0.5;      // 合成データのバックスイング頂点(p = 0.5)
+  // 自動検出は投球後の動きを取り違える(範囲の指定なし)。人が局面を指定すると、それに従う
+  const auto = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear' });
+  assert.equal(auto.momentsSource, 'auto');
+  assert.ok(Math.abs(auto.releaseTime - releaseTrue) > 0.8, 'auto detection picks the late bottom here');
+  const manual = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { backswing: backTrue, release: releaseTrue } });
+  assert.ok(manual.isValidThrow && manual.momentsSource === 'manual', manual.summary);
+  assert.ok(Math.abs(manual.releaseTime - releaseTrue) < 0.05 && Math.abs(manual.backswingTime - backTrue) < 0.05, `${manual.backswingTime - t0} / ${manual.releaseTime - t0}`);
+  assert.ok(manual.metrics.some(m => m.key === 'backswingOffset'), 'metrics are measured at the given moments');
+
+  // リリースだけ指定: 頂点は、そのリリースの直前から自動で探す
+  const relOnly = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { release: releaseTrue } });
+  assert.ok(relOnly.isValidThrow && Math.abs(relOnly.releaseTime - releaseTrue) < 0.05 && relOnly.backswingTime < relOnly.releaseTime - 0.1);
+
+  // 2D でも、横撮影でも、同じように使える
+  const two = analyze({ frames: frames.map(({ t, j }) => ({ t, j })), hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { backswing: backTrue, release: releaseTrue } });
+  assert.ok(two.isValidThrow && two.method === '2d' && Math.abs(two.releaseTime - releaseTrue) < 0.05);
+
+  // 局面が逆順(リリースが頂点より前)なら、投球として扱わない
+  const bad = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { backswing: releaseTrue, release: backTrue } });
+  assert.equal(bad.isValidThrow, false);
 }
 
 console.log('OK');
