@@ -1,3 +1,4 @@
+import { findMomentsBody } from './moments.js';
 import { hipAxis, smoothAxes, toBody, angle3, dist3, mid3 } from './body3d.js';
 
 // 姿勢の時系列からフォーム指標を計算する (iOS 版 FormAnalyzer.swift の移植)。
@@ -201,7 +202,7 @@ function findSwing(s, wy, limitT = Infinity, manual = null) {
       if (back < 0 || wy[i] < wy[back]) back = i;
     }
   }
-  return { back, rel, manual: hasRel || hasBack };
+  return { back, rel, manual: (hasRel || hasBack) && !manual.auto, trusted: hasRel || hasBack };
 }
 
 /**
@@ -281,10 +282,10 @@ function analyzeRear({ frames, hand, throwStart, throwEnd, moments, preset }) {
   const torsoAt = (x) => Math.max(dist(x.shoulderMid, x.hipMid), 0.02);
   const wy = smooth(s.map(x => (x.wrist.y - x.hipMid.y) / torsoAt(x)));
   const win = approachLimit(s, throwStart, throwEnd);
-  const { back, rel, manual } = findSwing(s, wy, win.limit, moments);
+  const { back, rel, manual, trusted } = findSwing(s, wy, win.limit, moments);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   // 人が局面を指定したときは、スイングの大きさの検査と、助走の検査を省く(人の確認を優先する)
-  if (manual ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
+  if (trusted ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
   // 助走で奥へ遠ざかったか(胴体の見かけの大きさが十分に縮んだか)
   if (!manual && torsoAt(s[0]) / torsoAt(s[rel]) < 1.12) return invalid('助走(奥へ進む動き)が確認できませんでした。');
 
@@ -343,10 +344,10 @@ function analyzeSide({ frames, hand, throwStart, throwEnd, moments, preset }) {
   // 腰を基準にした手首の高さ(下向きが正、胴体長で正規化)
   const wy = smooth(s.map(x => (x.wrist.y - x.hipMid.y) / torso));
   const win = approachLimit(s, throwStart, throwEnd);
-  const { back, rel, manual } = findSwing(s, wy, win.limit, moments);
+  const { back, rel, manual, trusted } = findSwing(s, wy, win.limit, moments);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   // 人が局面を指定したときは、スイングの大きさの検査と、助走の検査を省く(人の確認を優先する)
-  if (manual ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
+  if (trusted ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
   // 助走で横方向に胴体の長さ以上動いたか
   if (!manual && Math.abs(s[rel].hipMid.x - s[0].hipMid.x) / torso < 1.0) return invalid('助走(前へ進む動き)が確認できませんでした。');
 
@@ -427,10 +428,10 @@ function analyzeBody({ frames, hand, throwStart, throwEnd, moments, view, preset
   // 腰を基準にした手首の高さ(下向きが正、胴体長で正規化) — 2D と同じ向きの定義
   const wy = smooth(s.map((x, i) => -x.wrist.up / torso3[i]));
   const win = approachLimit(s, throwStart, throwEnd);
-  const { back, rel, manual } = findSwing(s, wy, win.limit, moments);
+  const { back, rel, manual, trusted } = findSwing(s, wy, win.limit, moments);
   if (back < 0) return invalid('バックスイングを検出できませんでした。');
   // 人が局面を指定したときは、スイングの大きさの検査と、助走の検査を省く(人の確認を優先する)
-  if (manual ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
+  if (trusted ? rel - back < 2 : (wy[rel] - wy[back] < 1.0 || rel - back < 3)) return invalid('投球スイングとして認識できませんでした。');
 
   // 助走の確認は画像上の動き(2D)で行う
   const t2 = (x) => Math.max(dist(mid(x.j.leftShoulder, x.j.rightShoulder), mid(x.j.leftHip, x.j.rightHip)), 0.02);
@@ -515,6 +516,11 @@ function presetFor(method, preset) {
  */
 export function analyze({ frames, hand, throwStart, throwEnd = null, moments = null, view = 'side', preset = null }) {
   const notes = [];
+  // 後方撮影で、人が局面を指定していないときは、体の動き(PC 側と同じ方式)で局面を求める。求められなければ、従来の検出に任せる。
+  if (!moments && view === 'rear') {
+    const m = findMomentsBody(frames, hand);
+    if (m) moments = { backswing: m.backswing, release: m.release, auto: true };
+  }
   let report = null;
   let skipped = false;
   const world = hasWorld(frames);

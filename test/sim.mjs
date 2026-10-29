@@ -640,9 +640,9 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   assert.ok(evStop <= evEnd && evStop > evStart, 'stoppedAt is between the start and the confirmed end')
   assert.ok(evStart !== null && evEnd !== null, 'the detector finds the approach window');
 
-  // 検知器の「止まり始め」で範囲を限ると、投球後の動きをリリースと取り違えない
+  // 後方撮影は、体の動き(js/moments.js: リリースの谷 → フォロースルーの山)で局面を求めるので、範囲の限定がなくても、投球後の動きを取り違えない
   const unguarded = analyze({ frames, hand: 'right', throwStart: evStart, view: 'rear' });
-  assert.ok(Math.abs(unguarded.releaseTime - lateBottom) < 0.4, `without a window the late bottom wins (known weakness): ${unguarded.releaseTime - t0}`);
+  assert.ok(Math.abs(unguarded.releaseTime - releaseTrue) < 0.4, `without a window the release is still found: ${unguarded.releaseTime - t0}`);
   const fixed = analyze({ frames, hand: 'right', throwStart: evStart, throwEnd: evStop, view: 'rear' });
   assert.ok(fixed.isValidThrow && fixed.method === '3d', fixed.summary);
   assert.ok(Math.abs(fixed.releaseTime - releaseTrue) < 0.3, `release at ${fixed.releaseTime - t0}, expected ~${releaseTrue - t0}`);
@@ -686,10 +686,12 @@ const run3d = (opts) => analyze({ frames: make3dThrow(opts), hand: opts.hand || 
   const frames = make3dThrow({ t0, view: 'rear', yawDeg: 0, postSwing: true });
   const releaseTrue = t0 + 1.5 + 2.2 * 0.85;
   const backTrue = t0 + 1.5 + 2.2 * 0.5;      // 合成データのバックスイング頂点(p = 0.5)
-  // 自動検出は投球後の動きを取り違える(範囲の指定なし)。人が局面を指定すると、それに従う
+  // 後方撮影の自動検出は、投球後の動きを取り違えない。人が局面を指定すると、自動検出よりそれを優先する
   const auto = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear' });
   assert.equal(auto.momentsSource, 'auto');
-  assert.ok(Math.abs(auto.releaseTime - releaseTrue) > 0.8, 'auto detection picks the late bottom here');
+  assert.ok(Math.abs(auto.releaseTime - releaseTrue) < 0.4, 'auto detection finds the release');
+  const shifted = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { backswing: backTrue - 0.2, release: releaseTrue - 0.3 } });
+  assert.ok(shifted.momentsSource === 'manual' && Math.abs(shifted.releaseTime - (releaseTrue - 0.3)) < 0.05, 'manual moments win over auto');
   const manual = analyze({ frames, hand: 'right', throwStart: t0 + 1.5, view: 'rear', moments: { backswing: backTrue, release: releaseTrue } });
   assert.ok(manual.isValidThrow && manual.momentsSource === 'manual', manual.summary);
   assert.ok(Math.abs(manual.releaseTime - releaseTrue) < 0.05 && Math.abs(manual.backswingTime - backTrue) < 0.05, `${manual.backswingTime - t0} / ${manual.releaseTime - t0}`);
