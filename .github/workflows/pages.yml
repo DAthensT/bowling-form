@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - name: Stage site (public edition only: no tests, no local server, no js/local)
+      - name: "Stage site (public edition only: no tests, no local server, no js/local)"
         run: |
           mkdir _site
           cp -R index.html style.css manifest.webmanifest js _site/
