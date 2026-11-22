@@ -46,6 +46,8 @@ let presence = new PresenceFilter();
 const hand = () => settings.get('hand', 'right');
 const view = () => (settings.get('view', 'side') === 'rear' ? 'rear' : 'side');
 const SENS_LABEL = { strict: '厳しい', normal: '標準', loose: 'ゆるい' };
+const REGION_LABEL = { all: '全体', left: '左半分', center: '中央', right: '右半分' };
+const region = () => (REGION_LABEL[settings.get('region', 'all')] ? settings.get('region', 'all') : 'all');
 const sens = () => (SENS_LABEL[settings.get('sens', 'normal')] ? settings.get('sens', 'normal') : 'normal');
 const makeDetector = () => new ThrowDetector({ view: view() });
 const VIEW_TIPS = {
@@ -94,8 +96,9 @@ function onSettingsChanged() {
   $('handLive').value = hand();
   $('view').value = view();
   $('viewLive').value = view();
-  if (pose) pose.setSensitivity(sens());
+  if (pose) { pose.setSensitivity(sens()); pose.setRegion(region()); }
   $('sens').value = sens();
+  $('region').value = region();
   presence.reset();
   $('viewNote').textContent = VIEW_TIPS[view()];
   setVoiceEnabled(settings.get('voice', true));
@@ -151,7 +154,10 @@ async function startCamera() {
     setMessage('姿勢推定モデルを読み込み中…');
     if (!pose) pose = await createPoseDetector();
     pose.setSensitivity(sens());
+    pose.setRegion(region());
+    pose.resetTracking();
     setMessage('カメラを起動中…');
+    // 720p で 60fps。iPhone の Safari は、1080p だと 30fps になる(実機で確認)ので、解像度は上げない
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
       audio: false
@@ -161,6 +167,7 @@ async function startCamera() {
     const s = stream.getVideoTracks()[0].getSettings();
     $('fps').textContent = `${video.videoWidth}×${video.videoHeight} ${Math.round(s.frameRate || 0)}fps`;
     layoutStage();
+    await setupZoom();
 
     recorder = new ThrowRecorder(stream);
     recorder.start();
@@ -183,8 +190,49 @@ async function startCamera() {
   }
 }
 
+// 撮影の倍率: カメラ自体のズーム(録画にも反映される)。端末が対応している場合だけ表示する
+const ZOOM_KEY = 'bf.zoom';
+
+async function applyZoom(v) {
+  const track = stream?.getVideoTracks()[0];
+  if (!track) return;
+  try {
+    await track.applyConstraints({ advanced: [{ zoom: v }] });
+    const z = track.getSettings().zoom || v;
+    $('zoomVal').textContent = z.toFixed(1) + '×';
+    try { localStorage.setItem(ZOOM_KEY, String(v)); } catch { /* 保存できなくても動く */ }
+  } catch (e) {
+    console.warn('zoom failed', e);
+  }
+}
+
+async function setupZoom() {
+  const field = $('zoomField'), note = $('zoomNote');
+  const track = stream.getVideoTracks()[0];
+  const cap = track.getCapabilities?.().zoom;
+  field.hidden = !cap;
+  note.hidden = !!cap;
+  if (!cap) {
+    note.textContent = 'この端末・ブラウザでは、撮影の倍率を変えられません(カメラを近づけるか離して調整してください)。';
+    return;
+  }
+  const r = $('zoom');
+  r.min = cap.min; r.max = cap.max; r.step = cap.step || 0.1;
+  let saved = 1;
+  try { saved = parseFloat(localStorage.getItem(ZOOM_KEY)) || 1; } catch { /* 既定 */ }
+  r.value = Math.min(cap.max, Math.max(cap.min, saved));
+  await applyZoom(parseFloat(r.value));
+  layoutStage();
+}
+$('zoom').addEventListener('input', async (e) => {
+  await applyZoom(parseFloat(e.target.value));
+  layoutStage();
+});
+
 function stopCamera() {
   running = false;
+  $('zoomField').hidden = true;
+  $('zoomNote').hidden = true;
   recorder?.stop();
   recorder = null;
   stream?.getTracks().forEach((t) => t.stop());
@@ -288,11 +336,12 @@ function renderDiag(raw) {
   const th = detector.view === 'rear' ? detector.config.rearStartSlope : detector.config.startSpeed;
   lines.push(`動き量: ${detector.signal.toFixed(3)} / 開始しきい値 ${th.toFixed(3)}${detector.isActive ? ' (投球中)' : ''}`);
   lines.push(`状態: ${$('stateLabel').textContent} / 感度: ${SENS_LABEL[sens()]}`);
-  lines.push(`撮影位置: ${view() === 'rear' ? '後方' : '横'}`);
+  lines.push(`撮影位置: ${view() === 'rear' ? '後方' : '横'} / 人物を探す範囲: ${REGION_LABEL[region()]} / 拡大追跡: ${d.zoomed ? '中' : 'なし'}`);
   $('diagText').textContent = lines.join(String.fromCharCode(10));
 }
 
 $('sens').addEventListener('change', () => { settings.set('sens', $('sens').value); onSettingsChanged(); });
+$('region').addEventListener('change', () => { settings.set('region', $('region').value); onSettingsChanged(); });
 
 // ---------------------------------------------------------------- throw lifecycle
 
@@ -491,6 +540,7 @@ const METHOD_TAG = { '3d': '3D', '2d': '2D', legacy: '2D旧' };
 async function renderHistory() {
   const list = $('historyList');
   const items = await allThrows();
+  historyIds = items.map((r) => r.id);
   local.onHistory(items);
   if (!items.length) { list.innerHTML = '<p class="muted">まだ投球がありません</p>'; return; }
   list.innerHTML = items.map((r) =>
@@ -503,6 +553,7 @@ async function renderHistory() {
 
 let detailUrl = null;
 let detailRaf = 0;
+let historyIds = []; // 履歴の表示順(上下スワイプで前後の投球へ移るのに使う)
 
 /** 履歴の詳細: 再生位置に合わせて、検出した骨格と局面名を録画に重ねる。検出できていない瞬間は赤く表示する。 */
 function loopDetail() {
@@ -557,7 +608,12 @@ if (EDITION === 'local') {
 async function openDetail(id) {
   const r = await getThrow(id);
   if (!r) return;
+  if (detailUrl) { URL.revokeObjectURL(detailUrl); detailUrl = null; }
+  stopSpeech();
   openRecord = r;
+  const pos = historyIds.indexOf(r.id);
+  $('detailPos').textContent = $('fullPos').textContent = pos >= 0 ? `${pos + 1} / ${historyIds.length}` : '';
+  $('detail').scrollTop = 0;
   local.onDetail(r);
   $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
   $('detailMetrics').innerHTML = r.report.metrics.map((m) =>
@@ -594,7 +650,29 @@ function renderDetailAi() {
   $('reAi').disabled = r.aiStatus === 'pending' || r.aiStatus === 'streaming';
 }
 
+// 画面いっぱいの表示。動画と骨格の重ね表示を、同じ大きさ(縦横比を保って画面に収まる大きさ)に揃える
+function fitDetail() {
+  const st = $('detailStage'), v = $('detailVideo'), cv = $('detailOverlay');
+  const full = st.classList.contains('full');
+  const els = [v, cv];
+  if (!full) { for (const e of els) { e.style.width = ''; e.style.height = ''; } return; }
+  const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+  const s = Math.min(st.clientWidth / vw, st.clientHeight / vh);
+  for (const e of els) { e.style.width = vw * s + 'px'; e.style.height = vh * s + 'px'; }
+}
+function setDetailFull(on) {
+  $('detailStage').classList.toggle('full', on);
+  $('fullBtn').textContent = on ? '✕' : '⛶';
+  $('fullBtn').setAttribute('aria-label', on ? 'フル画面を閉じる' : 'フル画面');
+  fitDetail();
+}
+$('fullBtn').addEventListener('click', () => setDetailFull(!$('detailStage').classList.contains('full')));
+$('detailVideo').addEventListener('loadedmetadata', fitDetail);
+window.addEventListener('resize', fitDetail);
+window.addEventListener('orientationchange', () => setTimeout(fitDetail, 300));
+
 function closeDetail() {
+  setDetailFull(false);
   cancelAnimationFrame(detailRaf);
   $('detail').hidden = true;
   const v = $('detailVideo');
@@ -609,6 +687,69 @@ function closeDetail() {
 }
 
 $('detailClose').addEventListener('click', closeDetail);
+
+// 動画の上を上下にスワイプして、前後の投球へ移る(ショート動画と同じ操作)。
+// 上へスワイプ = 履歴で下にある次の投球(より古い)、下へスワイプ = 1つ前(より新しい)。
+// 動画のコントロール(シークバー)を使えるように、動画の下端は反応させない。
+{
+  const stage = $('detailStage');
+  const EDGE = 56, COMMIT_PX = 90, FLICK_PX = 40, FLICK_SPEED = 0.5; // 速度は px/ms
+  let sw = null, busy = false;
+  const neighbor = (dir) => {
+    const i = openRecord ? historyIds.indexOf(openRecord.id) : -1;
+    return i < 0 ? null : historyIds[i + dir] ?? null;
+  };
+  const place = (y, ms) => {
+    stage.style.transition = ms ? `transform ${ms}ms ease-out, opacity ${ms}ms ease-out` : 'none';
+    stage.style.transform = y ? `translateY(${y}px)` : '';
+  };
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  stage.addEventListener('touchstart', (e) => {
+    sw = null;
+    if (busy || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (t.clientY > stage.getBoundingClientRect().bottom - EDGE) return;
+    sw = { x: t.clientX, y: t.clientY, at: performance.now(), drag: false };
+  }, { passive: true });
+
+  stage.addEventListener('touchmove', (e) => {
+    if (!sw) return;
+    const t = e.touches[0];
+    const dy = t.clientY - sw.y, dx = t.clientX - sw.x;
+    if (!sw.drag) {
+      if (Math.abs(dy) < 10 || Math.abs(dy) < Math.abs(dx)) return;
+      sw.drag = true;
+    }
+    // 前後がない端では、指に付いてくる量を減らして「これ以上ない」ことを伝える
+    place(dy * (neighbor(dy < 0 ? 1 : -1) ? 1 : 0.25), 0);
+  }, { passive: true });
+
+  const finish = async (e) => {
+    const s = sw; sw = null;
+    if (!s || !s.drag) return;
+    const dy = e.changedTouches[0].clientY - s.y;
+    const speed = Math.abs(dy) / Math.max(1, performance.now() - s.at);
+    const dir = dy < 0 ? 1 : -1;
+    const nid = neighbor(dir);
+    const commit = Math.abs(dy) > COMMIT_PX || (Math.abs(dy) > FLICK_PX && speed > FLICK_SPEED);
+    if (!nid || !commit) { place(0, 180); return; }
+    busy = true;
+    const h = stage.offsetHeight;
+    place(-dir * h, 160);
+    stage.style.opacity = '0';
+    await wait(160);
+    await openDetail(nid);
+    place(dir * h * 0.4, 0);
+    void stage.offsetHeight; // 開始位置を確定させてから戻す
+    place(0, 200);
+    stage.style.opacity = '1';
+    $('detailVideo').play().catch(() => { /* 自動再生できなくても、手動で再生できる */ });
+    busy = false;
+  };
+  stage.addEventListener('touchend', finish);
+  stage.addEventListener('touchcancel', () => { if (sw?.drag) place(0, 180); sw = null; });
+}
 $('reAi').addEventListener('click', () => { if (openRecord) runAI(openRecord); });
 $('speakBtn').addEventListener('click', () => {
   if (!openRecord) return;

@@ -95,7 +95,19 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line
 details summary { cursor: pointer; font-size: 13px; color: var(--muted); margin: 6px 0; }
 
 
-#detailStage { position: relative; }
+#detailStage { position: relative; touch-action: none; } /* 上下スワイプで前後の投球へ(動画の上ではページをスクロールしない) */
+/* フル画面は標準のものを使わない(標準のフル画面ではスワイプを受け取れないため)。標準のボタンを隠し、画面いっぱいの表示を自前で作る */
+#detailVideo::-webkit-media-controls-fullscreen-button { display: none; }
+.full-btn { position: absolute; top: 8px; right: 8px; z-index: 2; width: 36px; height: 36px; border-radius: 8px; border: 0;
+  background: rgba(0,0,0,.45); color: #fff; font-size: 20px; line-height: 1; padding: 0; }
+.full-pos { display: none; position: absolute; top: 14px; left: 12px; z-index: 2; color: #fff; font-size: 13px; text-shadow: 0 0 4px #000; }
+#detailStage.full { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; align-items: center; justify-content: center; }
+#detailStage.full #detailVideo { aspect-ratio: auto; border-radius: 0; }
+#detailStage.full #detailOverlay { inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+#detailStage.full .full-pos { display: block; top: max(14px, env(safe-area-inset-top)); }
+#detailStage.full .full-btn { top: max(8px, env(safe-area-inset-top)); }
+.swipe-hint { font-size: 12px; margin: 0 0 6px; }
+#detailPos { margin-left: auto; font-size: 13px; }
 #detailOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 /* 履歴の一覧の測定方式タグ。要約用の `#historyList .item span` の指定(2行で省略)を上書きする */
