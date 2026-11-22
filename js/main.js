@@ -10,6 +10,7 @@ import { PresenceFilter } from './presence.js';
 import { compare, selectHistory } from './trend.js';
 import { EDITION } from './edition.js';
 import { createShorts } from './shorts.js';
+import { initUi } from './ui.js';
 import { RateGovernor, IdleWatch, idleDelay } from './power.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
@@ -885,3 +886,4 @@ $('presetLive').addEventListener('change', () => { settings.set('presetId', $('p
 presetsTab = initPresetsTab({ onChanged: loadActivePreset });
 initFocusUi();
 initSettings();
+initUi();
