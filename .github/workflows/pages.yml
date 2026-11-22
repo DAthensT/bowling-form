@@ -43,6 +43,12 @@ jobs:
           mkdir _site
           cp -R index.html style.css manifest.webmanifest js _site/
           rm -rf _site/js/local
+      - name: "Stamp build id (new URLs per deploy: Pages caches files for 10 min, so old and new files must not mix)"
+        run: |
+          V=${GITHUB_SHA::7}
+          sed -i -E "s#(from '\./[^']+\.js)'#\1?v=$V'#" _site/js/*.js
+          sed -i -E "s#href=\"style\.css\"#href=\"style.css?v=$V\"#; s#src=\"js/main\.js\"#src=\"js/main.js?v=$V\"#; s#>開発中<#>$V<#" _site/index.html
+          grep -c "?v=$V" _site/index.html _site/js/main.js
       - name: Verify the staged site is the public edition
         run: node test/editions.mjs _site
       - uses: actions/upload-pages-artifact@v3
