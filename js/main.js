@@ -670,10 +670,30 @@ async function fillThumbs(items) {
 const dayLabel = (d) => new Date(d).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' });
 const timeLabel = (d) => new Date(d).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
+// いいねは、投球の記録(動画を含む)とは別に、この端末(localStorage)に { id: true } で持つ。
+// 記録に書くと、いいねのたびに動画ごと記録を書き直すことになり、iPhone の Safari では、再生中の動画が壊れる(再生されなくなる)ことがある。
+const likes = () => settings.get('likes', {}) || {};
+const isLiked = (id) => likes()[id] === true;
+const withLike = (r) => { if (r) r.liked = isLiked(r.id); return r; };
+const getThrowL = async (id) => withLike(await getThrow(id));
+const allThrowsL = async () => (await allThrows()).map(withLike);
+/** 以前の版で記録に書いた、いいねを引き継ぐ(1回だけ。記録は書き直さない) */
+async function migrateLikes() {
+  if (settings.get('likesMoved', false)) return;
+  const map = likes();
+  for (const r of await allThrows()) if (r.liked) map[r.id] = true;
+  settings.set('likes', map);
+  settings.set('likesMoved', true);
+}
+
 async function renderHistory() {
   const list = $('historyList');
-  const all = await allThrows();
+  await migrateLikes();
+  const all = await allThrowsL();
   local.onHistory(all);
+  const alive0 = new Set(all.map((r) => r.id));
+  const lk = likes();
+  if (Object.keys(lk).some((id) => !alive0.has(id))) settings.set('likes', Object.fromEntries(Object.entries(lk).filter(([id]) => alive0.has(id))));   // 消した投球の分は捨てる
   const nLiked = all.filter((r) => r.liked).length;
   const likedOnly = settings.get('likedOnly', false) === true;
   $('likedOnly').checked = likedOnly;
@@ -708,7 +728,7 @@ $('historyList').addEventListener('click', async (e) => {
     const on = !btn.classList.contains('on');
     btn.classList.toggle('on', on); btn.textContent = on ? '♥' : '♡'; btn.setAttribute('aria-pressed', String(on));
     await setLiked(cell.dataset.id, on);
-    const n = (await allThrows()).filter((r) => r.liked).length;
+    const n = Object.keys(likes()).length;
     $('likedCount').textContent = n ? `(${n}件)` : '';
     return;
   }
@@ -770,7 +790,7 @@ if (EDITION === 'local') {
 }
 
 async function openDetail(id) {
-  const r = await getThrow(id);
+  const r = await getThrowL(id);
   if (!r) return;
   if (detailUrl) { URL.revokeObjectURL(detailUrl); detailUrl = null; }
   stopSpeech();
@@ -835,12 +855,11 @@ function closeDetail(back = true) {
 $('detailClose').addEventListener('click', () => closeDetail(true));
 
 // 縦スワイプの連続再生(YouTube ショートと同じ操作)。履歴のマスを選ぶと開く。「詳細」で分析結果へ、「戻る」で履歴へ
-/** いいねの保存。手元の記録は古いことがある(ほかの処理が更新した項目を消さない)ので、保存し直す直前に読み直す */
+/** いいねの保存。投球の記録(動画)には触れない(上の likes を参照) */
 async function setLiked(id, on) {
-  const r = await getThrow(id);
-  if (!r) return;
-  if (on) r.liked = true; else delete r.liked;
-  await putThrow(r);
+  const map = likes();
+  if (on) map[id] = true; else delete map[id];
+  settings.set('likes', map);
   if (openRecord && openRecord.id === id) { openRecord.liked = !!on; reflectDetailLike(); }
 }
 function reflectDetailLike() {
@@ -854,7 +873,7 @@ $('likedOnly').addEventListener('change', () => { settings.set('likedOnly', $('l
 
 const shorts = createShorts({
   root: $('shorts'),
-  getThrow,
+  getThrow: getThrowL,
   getIds: () => historyIds,
   draw: drawOverlay,
   describe: (r) => ({

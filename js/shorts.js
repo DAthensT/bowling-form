@@ -177,11 +177,14 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   // 終わったら外す。残っていると、ビューアを閉じて再び開いたとき(表示し直したとき)に、アニメーションがもう一度再生される
   burst.addEventListener('animationend', () => burst.classList.remove('go'));
   // 1回のタップは一時停止/再生。素早く2回タップしたら、いいね(一時停止はしない)
+  // 一時停止を待つ時間は、2回目を待つ時間より長くする。逆だと、2回目が間に合っても一時停止してしまい、いいねの後に止まったままになる
+  const DOUBLE_MS = 300;
   function onTap() {
     const now = performance.now();
-    if (now - lastTap < 300) { clearTimeout(tapTimer); tapTimer = 0; lastTap = 0; like(true); return; }
+    if (tapTimer && now - lastTap < DOUBLE_MS) { clearTimeout(tapTimer); tapTimer = 0; lastTap = 0; like(true); return; }
     lastTap = now;
-    tapTimer = setTimeout(() => { tapTimer = 0; togglePlay(); }, 280);
+    clearTimeout(tapTimer);
+    tapTimer = setTimeout(() => { tapTimer = 0; togglePlay(); }, DOUBLE_MS + 20);
   }
 
   function updateInfo() {
