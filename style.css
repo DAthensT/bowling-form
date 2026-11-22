@@ -219,7 +219,9 @@ nav button:active:not(:disabled) { transform: none; opacity: .7; }
   pointer-events: none; transition: opacity .18s ease-out; display: flex; flex-direction: column; align-items: center; }
 .zoom-ctl.dialing .zoom-dial { opacity: 1; pointer-events: auto; touch-action: none; cursor: grab; }   /* 出ている間は、帯のどこをつかんでも回せる */
 .zoom-ctl.dialing .zoom-chips { pointer-events: none; }
-#stage { transform-origin: 50% 50%; will-change: transform; }
+/* 倍率のつなぎの拡大(js/ui.js)は、枠の中だけで行う。枠の外(上下の余白)へは、はみ出させない */
+#stage { overflow: hidden; }
+#stage video, #stage canvas { transform-origin: 50% 50%; }
 .zoom-chips { transition: opacity .15s, transform .18s var(--ease); }
 .zoom-ctl.dialing .zoom-chips { opacity: 0; transform: scale(.9); }
 .zoom-readout { color: var(--warn); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 4px rgba(0, 0, 0, .7);

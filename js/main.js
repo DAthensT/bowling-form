@@ -149,8 +149,9 @@ function layoutStage() {
   stage.style.width = w + 'px';
   stage.style.height = h + 'px';
   stage.style.aspectRatio = 'auto';
-  overlay.width = vw;
-  overlay.height = vh;
+  // 大きさが同じなら作り直さない(作り直すと、描いた骨格が消えて、ちらつく。倍率を変えるたびに呼ばれる)
+  if (overlay.width !== vw) overlay.width = vw;
+  if (overlay.height !== vh) overlay.height = vh;
 }
 window.addEventListener('resize', layoutStage);
 window.addEventListener('orientationchange', () => setTimeout(layoutStage, 300));

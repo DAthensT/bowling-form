@@ -191,13 +191,18 @@ function initZoom() {
 
   // ---- なめらかさ: カメラの倍率は段々にしか変えられない(反映にも少し時間がかかる)。
   // カメラが追いつくまでの間だけ、プレビューの映像(と骨格)を画面上で拡大・縮小してつなぐ。追いついたら等倍に戻る
-  const stageEl = $('stage'), videoEl = $('video');
+  // 拡大するのは、枠(#stage)の中の映像と骨格だけ。枠の大きさは変えない(枠ごと拡大すると、映像の範囲が伸び縮みして見える)
+  const stageEl = $('stage'), videoEl = $('video'), overlayEl = $('overlay');
   let camZ = Number(range.value) || 1;   // カメラに反映済みの倍率
   let camSeq = 0;
+  function setPreviewScale(t) {
+    if (videoEl.style.transform === t) return;
+    videoEl.style.transform = t;
+    overlayEl.style.transform = t;
+  }
   function updatePreview() {
     const k = shown / camZ;
-    const t = Math.abs(k - 1) < 0.002 ? '' : 'scale(' + k.toFixed(4) + ')';
-    if (stageEl.style.transform !== t) stageEl.style.transform = t;
+    setPreviewScale(Math.abs(k - 1) < 0.002 ? '' : 'scale(' + k.toFixed(4) + ')');
   }
   /** カメラが倍率 z に変わった。その倍率のコマが画面に出てから(2コマ後)、つなぎの拡大を外す */
   function cameraCaught(z) {
@@ -315,7 +320,7 @@ function initZoom() {
   new MutationObserver(() => {   // 撮影の開始・停止
     key = ''; camSeq++;
     shown = camZ = Number(range.value) || 1;
-    stageEl.style.transform = '';
+    setPreviewScale('');
     requestAnimationFrame(render);
   }).observe(ctl, { attributes: true, attributeFilter: ['hidden'] });
   new MutationObserver(() => { key = ''; requestAnimationFrame(render); }).observe(range, { attributes: true, attributeFilter: ['min', 'max'] });
