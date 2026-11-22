@@ -214,19 +214,19 @@ nav button:active:not(:disabled) { transform: none; opacity: .7; }
 .zoom-chip:active:not(:disabled) { transform: scale(1.1); }
 .zoom-chip.on:active:not(:disabled) { transform: scale(1.18); }
 .zoom-range { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-/* ダイヤル: なぞっている間とピンチの間だけ、ボタンの上に出る */
-.zoom-dial { position: absolute; bottom: calc(100% + 2px); left: 50%; width: min(92vw, 360px); transform: translateX(-50%) translateY(10px); opacity: 0;
-  pointer-events: none; transition: opacity .2s, transform .2s var(--ease); display: flex; flex-direction: column; align-items: center; }
-.zoom-ctl.dialing .zoom-dial { opacity: 1; transform: translateX(-50%); }
-.zoom-ctl.dialing .zoom-chips { opacity: 0; transition: opacity .15s; }
-.zoom-readout { color: var(--warn); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 4px rgba(0, 0, 0, .7); margin-bottom: 2px; }
-.zoom-ruler { width: 100%; height: auto; aspect-ratio: 360 / 96; overflow: visible;
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
-  background: radial-gradient(130% 160% at 50% 100%, rgba(0, 0, 0, .55) 55%, transparent 56%); }
-.zoom-ruler line { stroke: rgba(255, 255, 255, .7); stroke-width: 1.2; }
+/* ダイヤル: なぞっている間とピンチの間だけ、ボタンの列の場所に、画面幅いっぱいの弧の帯として出る(ボタンは消える) */
+.zoom-dial { position: absolute; bottom: -12px; left: 50%; width: 100vw; max-width: 520px; transform: translateX(-50%); opacity: 0;
+  pointer-events: none; transition: opacity .18s ease-out; display: flex; flex-direction: column; align-items: center; }
+.zoom-ctl.dialing .zoom-dial { opacity: 1; }
+.zoom-chips { transition: opacity .15s, transform .18s var(--ease); }
+.zoom-ctl.dialing .zoom-chips { opacity: 0; transform: scale(.9); }
+.zoom-readout { color: var(--warn); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 4px rgba(0, 0, 0, .7);
+  margin-bottom: -2px; padding: 2px 10px; border-radius: 999px; background: rgba(0, 0, 0, .45); }
+.zoom-ruler { display: block; width: 100%; height: auto; aspect-ratio: 400 / 96; overflow: visible; }
+.zoom-ruler .zr-band { fill: rgba(0, 0, 0, .55); }
+.zoom-ruler line { stroke: rgba(255, 255, 255, .55); stroke-width: 1.1; stroke-linecap: round; }
 .zoom-ruler line.mj { stroke: #fff; stroke-width: 1.8; }
-.zoom-ruler text { fill: #fff; font-size: 11px; font-weight: 600; text-anchor: middle; }
-.zoom-ruler .zr { transition: transform .08s linear; }
+.zoom-ruler text { fill: #fff; font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
 .zoom-ruler .zr-mark { fill: var(--warn); }
 .sheet-grip { display: none; }
 @media (orientation: portrait) {
