@@ -9,6 +9,7 @@ import { initPresetsTab } from './presets-ui.js';
 import { PresenceFilter } from './presence.js';
 import { compare, selectHistory } from './trend.js';
 import { EDITION } from './edition.js';
+import { createShorts } from './shorts.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
@@ -556,13 +557,10 @@ let detailRaf = 0;
 let historyIds = []; // 履歴の表示順(上下スワイプで前後の投球へ移るのに使う)
 
 /** 履歴の詳細: 再生位置に合わせて、検出した骨格と局面名を録画に重ねる。検出できていない瞬間は赤く表示する。 */
-function loopDetail() {
-  const r = openRecord;
-  const cv = $('detailOverlay');
+function drawOverlay(cv, v, r) {
   const c = cv.getContext('2d');
   c.clearRect(0, 0, cv.width, cv.height);
   if (r && r.poses && $('detailPose').checked && cv.width > 0) {
-    const v = $('detailVideo');
     const t = v.currentTime;
     let best = null, bd = Infinity;
     for (const f of r.poses) { const d = Math.abs(f.t - t); if (d < bd) { bd = d; best = f; } }
@@ -593,6 +591,9 @@ function loopDetail() {
       if (label) { c.fillStyle = '#ffd60a'; c.fillText(label, 12 * u, 48 * u); }
     }
   }
+}
+function loopDetail() {
+  drawOverlay($('detailOverlay'), $('detailVideo'), openRecord);
   detailRaf = requestAnimationFrame(loopDetail);
 }
 // ---------------------------------------------------------------- 版ごとの機能
@@ -612,7 +613,7 @@ async function openDetail(id) {
   stopSpeech();
   openRecord = r;
   const pos = historyIds.indexOf(r.id);
-  $('detailPos').textContent = $('fullPos').textContent = pos >= 0 ? `${pos + 1} / ${historyIds.length}` : '';
+  $('detailPos').textContent = pos >= 0 ? `${pos + 1} / ${historyIds.length}` : '';
   $('detail').scrollTop = 0;
   local.onDetail(r);
   $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
@@ -650,29 +651,7 @@ function renderDetailAi() {
   $('reAi').disabled = r.aiStatus === 'pending' || r.aiStatus === 'streaming';
 }
 
-// 画面いっぱいの表示。動画と骨格の重ね表示を、同じ大きさ(縦横比を保って画面に収まる大きさ)に揃える
-function fitDetail() {
-  const st = $('detailStage'), v = $('detailVideo'), cv = $('detailOverlay');
-  const full = st.classList.contains('full');
-  const els = [v, cv];
-  if (!full) { for (const e of els) { e.style.width = ''; e.style.height = ''; } return; }
-  const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
-  const s = Math.min(st.clientWidth / vw, st.clientHeight / vh);
-  for (const e of els) { e.style.width = vw * s + 'px'; e.style.height = vh * s + 'px'; }
-}
-function setDetailFull(on) {
-  $('detailStage').classList.toggle('full', on);
-  $('fullBtn').textContent = on ? '✕' : '⛶';
-  $('fullBtn').setAttribute('aria-label', on ? 'フル画面を閉じる' : 'フル画面');
-  fitDetail();
-}
-$('fullBtn').addEventListener('click', () => setDetailFull(!$('detailStage').classList.contains('full')));
-$('detailVideo').addEventListener('loadedmetadata', fitDetail);
-window.addEventListener('resize', fitDetail);
-window.addEventListener('orientationchange', () => setTimeout(fitDetail, 300));
-
 function closeDetail() {
-  setDetailFull(false);
   cancelAnimationFrame(detailRaf);
   $('detail').hidden = true;
   const v = $('detailVideo');
@@ -688,68 +667,25 @@ function closeDetail() {
 
 $('detailClose').addEventListener('click', closeDetail);
 
-// 動画の上を上下にスワイプして、前後の投球へ移る(ショート動画と同じ操作)。
-// 上へスワイプ = 履歴で下にある次の投球(より古い)、下へスワイプ = 1つ前(より新しい)。
-// 動画のコントロール(シークバー)を使えるように、動画の下端は反応させない。
-{
-  const stage = $('detailStage');
-  const EDGE = 56, COMMIT_PX = 90, FLICK_PX = 40, FLICK_SPEED = 0.5; // 速度は px/ms
-  let sw = null, busy = false;
-  const neighbor = (dir) => {
-    const i = openRecord ? historyIds.indexOf(openRecord.id) : -1;
-    return i < 0 ? null : historyIds[i + dir] ?? null;
-  };
-  const place = (y, ms) => {
-    stage.style.transition = ms ? `transform ${ms}ms ease-out, opacity ${ms}ms ease-out` : 'none';
-    stage.style.transform = y ? `translateY(${y}px)` : '';
-  };
-  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
-
-  stage.addEventListener('touchstart', (e) => {
-    sw = null;
-    if (busy || e.touches.length !== 1) return;
-    const t = e.touches[0];
-    if (t.clientY > stage.getBoundingClientRect().bottom - EDGE) return;
-    sw = { x: t.clientX, y: t.clientY, at: performance.now(), drag: false };
-  }, { passive: true });
-
-  stage.addEventListener('touchmove', (e) => {
-    if (!sw) return;
-    const t = e.touches[0];
-    const dy = t.clientY - sw.y, dx = t.clientX - sw.x;
-    if (!sw.drag) {
-      if (Math.abs(dy) < 10 || Math.abs(dy) < Math.abs(dx)) return;
-      sw.drag = true;
-    }
-    // 前後がない端では、指に付いてくる量を減らして「これ以上ない」ことを伝える
-    place(dy * (neighbor(dy < 0 ? 1 : -1) ? 1 : 0.25), 0);
-  }, { passive: true });
-
-  const finish = async (e) => {
-    const s = sw; sw = null;
-    if (!s || !s.drag) return;
-    const dy = e.changedTouches[0].clientY - s.y;
-    const speed = Math.abs(dy) / Math.max(1, performance.now() - s.at);
-    const dir = dy < 0 ? 1 : -1;
-    const nid = neighbor(dir);
-    const commit = Math.abs(dy) > COMMIT_PX || (Math.abs(dy) > FLICK_PX && speed > FLICK_SPEED);
-    if (!nid || !commit) { place(0, 180); return; }
-    busy = true;
-    const h = stage.offsetHeight;
-    place(-dir * h, 160);
-    stage.style.opacity = '0';
-    await wait(160);
-    await openDetail(nid);
-    place(dir * h * 0.4, 0);
-    void stage.offsetHeight; // 開始位置を確定させてから戻す
-    place(0, 200);
-    stage.style.opacity = '1';
-    $('detailVideo').play().catch(() => { /* 自動再生できなくても、手動で再生できる */ });
-    busy = false;
-  };
-  stage.addEventListener('touchend', finish);
-  stage.addEventListener('touchcancel', () => { if (sw?.drag) place(0, 180); sw = null; });
-}
+// 縦スワイプの連続再生(YouTube ショートと同じ操作)。詳細の動画の ⛶ で開く。閉じると、そのとき見ていた投球の詳細に戻る
+const shorts = createShorts({
+  root: $('shorts'),
+  getThrow,
+  getIds: () => historyIds,
+  draw: drawOverlay,
+  describe: (r) => ({
+    title: new Date(r.date).toLocaleString('ja-JP'),
+    sub: (r.view === 'rear' ? '後方' : '側面') + (r.presetName ? ` / お手本: ${r.presetName}` : ''),
+  }),
+  getPose: () => $('detailPose').checked,
+  setPose: (on) => { $('detailPose').checked = on; },
+  onExit: (id) => openDetail(id),
+});
+$('fullBtn').addEventListener('click', () => {
+  if (!openRecord) return;
+  $('detailVideo').pause();
+  shorts.open(openRecord.id);
+});
 $('reAi').addEventListener('click', () => { if (openRecord) runAI(openRecord); });
 $('speakBtn').addEventListener('click', () => {
   if (!openRecord) return;
