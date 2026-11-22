@@ -204,10 +204,20 @@ nav button:active:not(:disabled) { transform: none; opacity: .7; }
 .setup[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .setup-body { padding: 0 16px 10px; border-top: 1px solid var(--line); }
 
+/* 撮影の倍率: 映像の下のほう(縦向きでは、下の帯のすぐ上)。ふだんは丸いボタンだけ、タップでスライダーが広がる */
+.stage-wrap { touch-action: none; }
+.zoom-ctl { position: absolute; z-index: 3; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.zoom-pill { width: 46px; height: 46px; min-height: 46px; padding: 0; border-radius: 50%; background: rgba(0, 0, 0, .5); color: var(--warn);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, .18); font-size: 13px; }
+.zoom-pill b { font-variant-numeric: tabular-nums; }
+.zoom-ctl input[type=range] { width: min(72vw, 300px); margin: 0; accent-color: var(--warn); opacity: 0; transform: translateY(8px) scaleX(.6); pointer-events: none;
+  transition: opacity .2s, transform .2s var(--ease); padding: 10px 14px; border-radius: 999px; background: rgba(0, 0, 0, .45); box-sizing: content-box; }
+.zoom-ctl.open input[type=range] { opacity: 1; transform: none; pointer-events: auto; }
 .sheet-grip { display: none; }
 @media (orientation: portrait) {
   .live { position: relative; display: block; }
   .stage-wrap { height: 100%; }
+  .zoom-ctl { bottom: calc(var(--peek, 140px) + 14px); }
   /* 下からの引き出し。閉じているときは、つまみと状態の帯だけ(--peek)が見える。位置は js/ui.js が動かす */
   .side { position: absolute; z-index: 4; left: 0; right: 0; bottom: 0; width: auto; max-height: 86%; overflow: hidden; border-left: 0;
     padding: 0 12px 16px; border-radius: 22px 22px 0 0; background: rgba(16, 16, 19, .9);

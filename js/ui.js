@@ -32,6 +32,54 @@ export function initUi() {
   });
 
   initHud();
+  initZoom();
+}
+
+// ---------------------------------------------------------------- 撮影の倍率(映像の上)
+// 丸いボタン(いまの倍率)をタップすると、スライダーが広がる。しばらく触らないと畳む。
+// 映像を2本指でピンチしても変わる。どちらも、倍率のスライダー(#zoom)の値を変えて input を送るだけ(カメラへの反映は main.js)
+function initZoom() {
+  const ctl = $('zoomField'), range = $('zoom'), pill = ctl.querySelector('.zoom-pill');
+  const wrap = document.querySelector('.stage-wrap');
+  let timer = 0;
+  const keepOpen = () => {
+    ctl.classList.add('open');
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.classList.remove('open'), 2500);
+  };
+  pill.addEventListener('click', () => { if (ctl.classList.contains('open')) { clearTimeout(timer); ctl.classList.remove('open'); } else keepOpen(); });
+  range.addEventListener('input', keepOpen);
+  range.addEventListener('pointerdown', keepOpen);
+
+  // ピンチ: 2本の指の間隔の比で、倍率を変える
+  const pts = new Map();
+  let pinch = null, raf = 0, want = null;
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  const push = () => {   // 1コマに1回だけ反映する(カメラの設定変更は重い)
+    raf = 0;
+    if (want === null || Number(range.value) === want) return;
+    range.value = String(want);
+    $('zoomVal').textContent = want.toFixed(1) + '×';   // すぐ見せる(カメラに反映できたら、main.js が実際の値で書き直す)
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  wrap.addEventListener('pointerdown', (e) => {
+    if (ctl.hidden || e.target.closest('button, input, #startPanel')) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) pinch = { d0: dist(), z0: Number(range.value) };
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pinch || pts.size !== 2) return;
+    const min = Number(range.min), max = Number(range.max), step = Number(range.step) || 0.1;
+    const z = Math.min(max, Math.max(min, pinch.z0 * dist() / Math.max(1, pinch.d0)));
+    want = Math.round(z / step) * step;
+    keepOpen();
+    if (!raf) raf = requestAnimationFrame(push);
+  });
+  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+  wrap.addEventListener('pointerup', up);
+  wrap.addEventListener('pointercancel', up);
 }
 
 // ---------------------------------------------------------------- 撮影画面の下の引き出し
@@ -51,6 +99,7 @@ function initSheet() {
     peek = Math.ceil(grip.offsetHeight + peekEl.offsetHeight + 2);
     full = side.offsetHeight;
     side.style.setProperty('--peek', peek + 'px');
+    side.parentElement.style.setProperty('--peek', peek + 'px');   // 倍率のボタンを、帯のすぐ上に置くため
   };
   const offsetFor = (open) => (open ? 0 : Math.max(0, full - peek));
   const apply = (animate) => {

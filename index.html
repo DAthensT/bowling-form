@@ -48,6 +48,11 @@
             <button type="button" class="hud-head" aria-expanded="true">リアルタイム指標</button>
             <div id="liveMetrics" class="muted">人物を検出中…</div>
           </div>
+          <!-- 撮影の倍率: 映像を見ながら合わせる(iPhone のカメラと同じく、映像の上に出す)。丸いボタンをタップでスライダー、2本指のピンチでも変わる(js/ui.js) -->
+          <div class="zoom-ctl" id="zoomField" hidden>
+            <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="撮影の倍率">
+            <button type="button" class="zoom-pill" aria-label="撮影の倍率を変える"><b id="zoomVal">1.0×</b></button>
+          </div>
           <div id="startPanel">
             <div class="start-card">
               <div class="start-icon"><svg class="ic"><use href="#i-camera"/></svg></div>
@@ -98,9 +103,6 @@
                 <select id="region"><option value="all">画面全体</option><option value="left">左半分</option><option value="center">中央</option><option value="right">右半分</option></select>
               </label>
               <p class="hint">隣のレーンの人が映る画角では、自分のレーンがある側を選ぶと、他の人を拾いません。</p>
-              <label class="field" id="zoomField" hidden><span class="field-row">撮影の倍率 <b id="zoomVal">1.0×</b></span>
-                <input id="zoom" type="range" min="1" max="1" step="0.1" value="1">
-              </label>
               <p id="zoomNote" class="hint" hidden></p>
               <div class="grid2">
                 <label class="field">お手本
