@@ -10,7 +10,7 @@ import { PresenceFilter } from './presence.js';
 import { compare, selectHistory } from './trend.js';
 import { EDITION } from './edition.js';
 import { createShorts } from './shorts.js';
-import { RateGovernor } from './power.js';
+import { RateGovernor, IdleWatch, idleDelay } from './power.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
@@ -70,6 +70,9 @@ function initSettings() {
   bind('ai', 'ai', true, 'checked');
   bind('geminiKey', 'geminiKey', '');
   bind('model', 'model', 'gemini-2.5-flash');
+  bind('autoDim', 'autoDim', '60');
+  bind('autoSleep', 'autoSleep', '300');
+  bind('recGate', 'recGate', true, 'checked');
   $('handLive').value = hand();
   $('handLive').addEventListener('change', () => { settings.set('hand', $('handLive').value); onSettingsChanged(); });
   bind('view', 'view', 'side');
@@ -179,6 +182,7 @@ async function startCamera() {
     presence = new PresenceFilter();
     history = []; snaps = [];
     governor.reset(performance.now() / 1000);
+    watch.reset(performance.now() / 1000);
     loopGen++;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* 非対応 */ }
 
@@ -295,12 +299,15 @@ function loop() {
   let frame = null;
   const t = nowMs / 1000;
   try { frame = pose.detect(video, nowMs); } catch (e) { console.warn('pose error', e); }
-  onFrame(frame, t);
+  const person = onFrame(frame, t);
+  if (!running) return;
+  if (powerSave(t, person, !!frame)) return;   // 休止した
   const cfg = detector.config;
   const sig = detector.view === 'rear' ? cfg.rearStartSlope : cfg.startSpeed;
   motionNow = frame ? Math.abs(detector.signal) / sig : 0;
   const wait = governor.next(t, { active: detector.isActive || state !== 'idle', motion: motionNow });
-  if (wait > 0) { const gen = loopGen; setTimeout(() => { if (running && gen === loopGen) schedule(loop); }, wait); }  // 停止→開始の直後に、前の撮影の予約が動かないようにする
+  const delay = wait > 0 ? idleDelay(wait, performance.now() - nowMs) : 0;
+  if (delay > 0) { const gen = loopGen; setTimeout(() => { if (running && gen === loopGen) schedule(loop); }, delay); }  // 停止→開始の直後に、前の撮影の予約が動かないようにする
   else schedule(loop);
 }
 
@@ -326,6 +333,38 @@ function onFrame(raw, t) {
     if (html !== lastHudHtml) { lastHudHtml = html; $('liveMetrics').innerHTML = html; }   // 同じ内容なら、画面を作り直さない
     if ($('diag').open) renderDiag(raw);
   }
+  return frame;
+}
+
+// 人がいない・画面を見ていないときの省電力(js/power.js の IdleWatch)
+//   A. 人がいないあいだは録画(動画のエンコード2本)を止める
+//   B. 長く人がいなければ、カメラごと休止する(画面のロックも許す)
+//   C. しばらく画面に触れなければ、画面を暗くする
+const watch = new IdleWatch();
+const secSetting = (key, def) => { const v = parseInt(settings.get(key, def), 10); return Number.isFinite(v) && v > 0 ? v : 0; };
+document.addEventListener('pointerdown', () => watch.touch(performance.now() / 1000), true);
+document.addEventListener('keydown', () => watch.touch(performance.now() / 1000), true);
+
+/**
+ * person: 人物の確認が済んだ人が見えている(休止の判断に使う)
+ * anyPose: 確認前でも、人らしい姿勢が出ている(録画の再開に使う。プリロールを削らないよう、早めに再開する)
+ * 戻り値: 休止したら true
+ */
+function powerSave(t, person, anyPose) {
+  if (person) watch.person(t);
+  if (anyPose) watch.seen(t);
+  const busy = state !== 'idle' || detector.isActive;
+  const d = watch.decide(t, { busy, sleepSec: secSetting('autoSleep', '300'), dimSec: secSetting('autoDim', '60') });
+  if (recorder) { if (d.record || !settings.get('recGate', true)) recorder.resume(); else recorder.pause(); }
+  if (d.dim && !dimmed) setDim(true);
+  if (d.sleep) {
+    const min = Math.round(secSetting('autoSleep', '300') / 60);
+    stopCamera();
+    setMessage(`${min}分間、人が映らなかったので、電池の節約のため撮影を休止しました。「開始」で再開します`);
+    speak('撮影を休止しました', true);
+    return true;
+  }
+  return false;
 }
 
 function drawPose(frame, confirmed) {
@@ -377,6 +416,7 @@ function renderDiag(raw) {
   const th = detector.view === 'rear' ? detector.config.rearStartSlope : detector.config.startSpeed;
   lines.push(`動き量: ${detector.signal.toFixed(3)} / 開始しきい値 ${th.toFixed(3)}${detector.isActive ? ' (投球中)' : ''}`);
   lines.push(`状態: ${$('stateLabel').textContent} / 感度: ${SENS_LABEL[sens()]}`);
+  lines.push(`録画: ${recorder && recorder.armed ? '待機録画中' : '停止中(人が映ると再開)'} / 推定: ${governor.isFull(performance.now() / 1000) ? '全コマ' : '間引き中'}`);
   lines.push(`撮影位置: ${view() === 'rear' ? '後方' : '横'} / 人物を探す範囲: ${REGION_LABEL[region()]} / 拡大追跡: ${d.zoomed ? '中' : 'なし'}`);
   $('diagText').textContent = lines.join(String.fromCharCode(10));
 }

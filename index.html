@@ -111,6 +111,15 @@
         <select id="view"><option value="side">真横から</option><option value="rear">真後ろから</option></select>
       </label>
       <label class="field check"><input type="checkbox" id="voice"> 音声でフィードバック</label>
+      <h3>撮影中の省電力</h3>
+      <label class="field">画面に触れないとき、自動で暗くする
+        <select id="autoDim"><option value="30">30秒後</option><option value="60">1分後</option><option value="180">3分後</option><option value="0">しない</option></select>
+      </label>
+      <label class="field">人が映らないとき、撮影を自動で休止する
+        <select id="autoSleep"><option value="300">5分後</option><option value="600">10分後</option><option value="1800">30分後</option><option value="0">しない</option></select>
+      </label>
+      <label class="field check"><input type="checkbox" id="recGate"> 人が映っていないあいだは、録画を止める</label>
+      <p class="muted">暗くしても、撮影・検知・録画は続きます(画面をタップすると戻ります)。録画を止めているあいだに、人が映ってすぐ投げ始めると、動画の頭(動き出しの前の部分)が短くなることがあります。気になるときは、録画を止める設定を外してください。</p>
       <h3>直したい点(重点項目)</h3>
       <div id="focusBox"></div>
       <label class="field">AIへの追加指示(自由記述)

@@ -20,18 +20,32 @@ export class ThrowRecorder {
     this.segments = [];
     this.locked = null;
     this.spawnTimer = null;
+    this.armed = false;   // 録画を回しているか(人がいないあいだは pause で止めて、電池を節約する)
   }
 
   start() {
+    this.armed = true;
     this.#spawn();
     this.spawnTimer = setInterval(() => this.#spawn(), STAGGER_MS);
   }
 
   stop() {
+    this.armed = false;
     clearInterval(this.spawnTimer);
     this.spawnTimer = null;
     for (const s of [...this.segments]) this.#end(s);
     this.locked = null;
+  }
+
+  /** 録画を止める(確保中の録画があれば何もしない)。resume で再開する。 */
+  pause() {
+    if (!this.armed || this.locked) return;
+    this.stop();
+  }
+
+  /** 止めていた録画を再開する。 */
+  resume() {
+    if (!this.armed) this.start();
   }
 
   #spawn() {
@@ -69,6 +83,7 @@ export class ThrowRecorder {
   /** 次の投球のプリロールに備えて、すぐに新しい録画サイクルを始める。 */
   #restart() {
     clearInterval(this.spawnTimer);
+    if (!this.armed) return;
     this.#spawn();
     this.spawnTimer = setInterval(() => this.#spawn(), STAGGER_MS);
   }

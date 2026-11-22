@@ -31,3 +31,42 @@ export class RateGovernor {
     return t < this.fullUntil ? 0 : this.idleMs;
   }
 }
+
+/**
+ * 間引くときに、実際にタイマーで待つ時間(ミリ秒)。待ちのあとは「次のカメラのコマ」を待つので、
+ * 推定にかかった時間(spentMs)と、そのコマ待ちの分(平均で半コマ ≒ 10ms)を差し引く。
+ * 差し引かないと、30fps のカメラでは 1回あたり 80ms 以上空いて、12回/秒ほどまで落ちる。
+ */
+export function idleDelay(wait, spentMs) {
+  return Math.max(0, wait - spentMs - 10);
+}
+
+// 人がいない・画面を見ていないときの省電力の判断(DOM なし。main.js から毎コマ呼ぶ)。
+//   record: 録画を回すか。人(人物の確認が済んだもの)が最後に見えてから recordHoldSec 秒は回す。
+//           投球前はアプローチに数秒立つので、プリロール(動き出しの約1秒前)は確保できる。
+//   sleep:  sleepSec 秒、人が見えなければ、カメラごと休止する(0 = しない)。
+//   dim:    dimSec 秒、画面に触れなければ、画面を暗くする(0 = しない)。
+//   busy(投球の最中・解析中)のあいだは、録画を止めず、休止もしない。
+export class IdleWatch {
+  constructor({ recordHoldSec = 5 } = {}) {
+    this.recordHoldSec = recordHoldSec;
+    this.reset(0);
+  }
+
+  reset(t) { this.lastPerson = t; this.lastPose = t; this.lastTouch = t; }
+  /** 人物の確認が済んだ人が見えた(録画も休止も、これで判断する) */
+  person(t) { this.lastPerson = t; this.lastPose = t; }
+  /** 確認前でも、人らしい姿勢が出た(録画だけ、これでも再開する) */
+  seen(t) { this.lastPose = t; }
+  touch(t) { this.lastTouch = t; }
+
+  decide(t, { busy = false, sleepSec = 0, dimSec = 0 } = {}) {
+    if (busy) this.person(t);
+    const away = t - this.lastPerson;
+    return {
+      record: t - this.lastPose < this.recordHoldSec,
+      sleep: sleepSec > 0 && away >= sleepSec,
+      dim: dimSec > 0 && t - this.lastTouch >= dimSec,
+    };
+  }
+}

@@ -28,7 +28,8 @@ export class RearMotionSignal {
   update(torsoLength, t) {
     this.samples.push({ t, ln: Math.log(torsoLength) });
     this.samples = this.samples.filter(s => t - s.t <= 0.6);
-    if (this.samples.length < 8 || this.samples[this.samples.length - 1].t - this.samples[0].t < 0.4) return null;
+    // 6枚以上・0.4秒以上の幅があれば計算する(待機中は推定を間引くので、0.6秒に 8〜9枚ほどになる)
+    if (this.samples.length < 6 || this.samples[this.samples.length - 1].t - this.samples[0].t < 0.4) return null;
     const n = this.samples.length;
     const mt = this.samples.reduce((a, s) => a + s.t, 0) / n;
     const ml = this.samples.reduce((a, s) => a + s.ln, 0) / n;
