@@ -9,10 +9,10 @@ const COMMIT_FRAC = 0.2;   // 画面の高さのこれだけ動かしたら次�
 const FLICK_SPEED = 0.35;  // px/ms。これ以上の速さではじいたら次へ
 const EDGE_RESIST = 0.3;   // 前後がない端での、指に付いてくる量
 
-export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, onExit }) {
+export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, onExit, onDetail }) {
   const q = (s) => root.querySelector(s);
   const stage = q('.sv-stage'), bar = q('.sv-bar'), fill = q('.sv-fill'), poseBtn = q('.sv-pose'), exitBtn = q('.sv-exit');
-  const likeBtn = q('.sv-like'), burst = q('.sv-burst');
+  const likeBtn = q('.sv-like'), burst = q('.sv-burst'), detailBtn = q('.sv-detail');
   const titleEl = q('.sv-title'), subEl = q('.sv-sub'), posEl = q('.sv-posn');
   let ids = [], cur = 0, drag = 0, W = 0, H = 0;
   let isOpen = false, animating = false, raf = 0, wheelAt = 0;
@@ -201,6 +201,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
 
   poseBtn.addEventListener('click', () => { setPose(!getPose()); });
   exitBtn.addEventListener('click', () => close());
+  detailBtn.addEventListener('click', () => close(onDetail));
 
   // ---- 描画: 骨格の重ね表示と進行バー。前後のカードにも描いておく(スワイプ中に骨格が遅れて出ないように)
   function tick() {
@@ -232,7 +233,8 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     layout(false); updateInfo();
     cancelAnimationFrame(raf); raf = requestAnimationFrame(tick);
   }
-  function close() {
+  /** 閉じる。after(id) には、そのとき見ていた投球の id を渡す(既定は onExit = 履歴へ戻る。onDetail = その投球の詳細へ) */
+  function close(after = onExit) {
     if (!isOpen) return;
     isOpen = false;
     clearTimeout(tapTimer); tapTimer = 0;
@@ -240,7 +242,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     const id = ids[cur];
     for (const c of [...cards.values()]) destroyCard(c);
     root.hidden = true; root.classList.remove('paused', 'scrubbing');
-    onExit(id);
+    after(id);
   }
   return { open, close, get isOpen() { return isOpen; } };
 }

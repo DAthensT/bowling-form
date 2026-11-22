@@ -136,10 +136,8 @@
   <!-- 履歴の詳細 -->
   <div id="detail" hidden>
     <div class="detail-inner">
-      <div class="detail-bar"><button id="detailClose" class="small">← 戻る</button><b id="detailTitle"></b><button id="detailLike" class="small like" aria-pressed="false" aria-label="いいね">♡</button><span id="detailPos" class="muted"></span></div>
-      <div id="detailStage"><video id="detailVideo" controls playsinline></video><canvas id="detailOverlay"></canvas>
-        <button id="fullBtn" class="full-btn" aria-label="縦スワイプで連続再生">⛶</button></div>
-      <p class="muted swipe-hint">⛶ で、ショート動画のように縦にスワイプして、投球を続けて見られます</p>
+      <div class="detail-bar"><button id="detailClose" class="small">← 動画へ</button><b id="detailTitle"></b><button id="detailLike" class="small like" aria-pressed="false" aria-label="いいね">♡</button><span id="detailPos" class="muted"></span></div>
+      <div id="detailStage"><video id="detailVideo" controls playsinline></video><canvas id="detailOverlay"></canvas></div>
       <label class="field check"><input type="checkbox" id="detailPose" checked> 骨格を重ねて表示(腕が検出できているか確認用)</label>
       <p id="detailDiag" class="muted"></p>
       <h3>計測値</h3><div id="detailMetrics"></div>
@@ -166,9 +164,10 @@
   <!-- 縦スワイプの連続再生(js/shorts.js) -->
   <div id="shorts" hidden>
     <div class="sv-stage"></div>
-    <button class="sv-exit" aria-label="閉じる">‹ 詳細</button>
+    <button class="sv-exit" aria-label="履歴に戻る">‹ 戻る</button>
     <span class="sv-posn"></span>
     <button class="sv-pose" aria-label="骨格の表示を切り替える">骨格</button>
+    <button class="sv-detail" aria-label="分析結果の詳細">詳細</button>
     <button class="sv-like" aria-label="いいね" aria-pressed="false">♡</button>
     <div class="sv-burst" aria-hidden="true">♥</div>
     <div class="sv-playicon" aria-hidden="true">▶</div>
