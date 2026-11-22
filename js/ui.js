@@ -35,53 +35,6 @@ export function initUi() {
   initZoom();
 }
 
-// ---------------------------------------------------------------- 撮影の倍率(映像の上)
-// 丸いボタン(いまの倍率)をタップすると、スライダーが広がる。しばらく触らないと畳む。
-// 映像を2本指でピンチしても変わる。どちらも、倍率のスライダー(#zoom)の値を変えて input を送るだけ(カメラへの反映は main.js)
-function initZoom() {
-  const ctl = $('zoomField'), range = $('zoom'), pill = ctl.querySelector('.zoom-pill');
-  const wrap = document.querySelector('.stage-wrap');
-  let timer = 0;
-  const keepOpen = () => {
-    ctl.classList.add('open');
-    clearTimeout(timer);
-    timer = setTimeout(() => ctl.classList.remove('open'), 2500);
-  };
-  pill.addEventListener('click', () => { if (ctl.classList.contains('open')) { clearTimeout(timer); ctl.classList.remove('open'); } else keepOpen(); });
-  range.addEventListener('input', keepOpen);
-  range.addEventListener('pointerdown', keepOpen);
-
-  // ピンチ: 2本の指の間隔の比で、倍率を変える
-  const pts = new Map();
-  let pinch = null, raf = 0, want = null;
-  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
-  const push = () => {   // 1コマに1回だけ反映する(カメラの設定変更は重い)
-    raf = 0;
-    if (want === null || Number(range.value) === want) return;
-    range.value = String(want);
-    $('zoomVal').textContent = want.toFixed(1) + '×';   // すぐ見せる(カメラに反映できたら、main.js が実際の値で書き直す)
-    range.dispatchEvent(new Event('input', { bubbles: true }));
-  };
-  wrap.addEventListener('pointerdown', (e) => {
-    if (ctl.hidden || e.target.closest('button, input, #startPanel')) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.size === 2) pinch = { d0: dist(), z0: Number(range.value) };
-  });
-  wrap.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (!pinch || pts.size !== 2) return;
-    const min = Number(range.min), max = Number(range.max), step = Number(range.step) || 0.1;
-    const z = Math.min(max, Math.max(min, pinch.z0 * dist() / Math.max(1, pinch.d0)));
-    want = Math.round(z / step) * step;
-    keepOpen();
-    if (!raf) raf = requestAnimationFrame(push);
-  });
-  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
-  wrap.addEventListener('pointerup', up);
-  wrap.addEventListener('pointercancel', up);
-}
-
 // ---------------------------------------------------------------- 撮影画面の下の引き出し
 // 縦向きのときだけ。閉じているときは、上の帯(つまみ・状態・停止ボタン)だけが見えている。
 // つまみ・帯を上へスライド(またはタップ)で開き、下へスライドで閉じる。開いている中身は、その中でスクロールできる。
@@ -149,6 +102,140 @@ function initSheet() {
   portrait.addEventListener('change', () => { measure(); apply(false); });
   measure(); apply(false);
   return { open: () => set(true), close: () => set(false) };
+}
+
+// ---------------------------------------------------------------- 撮影の倍率(映像の上。iPhone のカメラと同じ操作)
+// ・倍率のボタン(.5 / 1 / 2 / 3 など、端末が対応する範囲だけ)をタップで切り替える。選んでいるボタンは黄色で「1×」
+// ・ボタンを押したまま左右になぞると、上に目盛りのダイヤルが出て、細かく調整できる(左へなぞると拡大)
+// ・映像を2本指でピンチしても変わる(ダイヤルが出る)
+// どれも、倍率のスライダー(#zoom。画面には出さない)の値を変えて input を送るだけ。カメラへの反映は main.js
+const SVGNS = 'http://www.w3.org/2000/svg';
+function initZoom() {
+  const ctl = $('zoomField'), range = $('zoom'), chipsEl = ctl.querySelector('.zoom-chips');
+  const dial = ctl.querySelector('.zoom-dial'), ruler = ctl.querySelector('.zoom-ruler'), readout = ctl.querySelector('.zoom-readout');
+  const wrap = document.querySelector('.stage-wrap');
+  const lim = () => ({ min: Number(range.min) || 1, max: Number(range.max) || 1, step: Number(range.step) || 0.1 });
+  const val = () => Number(range.value) || 1;
+  const fmtZ = (z) => (Math.abs(z - Math.round(z)) < 0.05 ? String(Math.round(z)) : z.toFixed(1)).replace(/^0\./, '.');
+
+  // ---- ボタン
+  let presets = [], key = '';
+  function buildPresets() {
+    const { min, max } = lim();
+    const k = `${min}-${max}`;
+    if (k === key) return;
+    key = k;
+    presets = [];
+    if (min < 0.95) presets.push(Math.max(min, 0.5));
+    if (min <= 1 && max >= 1) presets.push(1);
+    if (max >= 2) presets.push(2);
+    if (max >= 5) presets.push(5); else if (max >= 3) presets.push(3);
+    if (!presets.length) presets.push(min);
+    chipsEl.innerHTML = presets.map((z, i) => `<button type="button" class="zoom-chip" data-i="${i}"></button>`).join('');
+    buildRuler();
+  }
+  function renderChips() {
+    buildPresets();
+    const z = val();
+    // いまの倍率に一番近い(超えない)ボタンが、いまの倍率を出す
+    let act = 0;
+    presets.forEach((p, i) => { if (z >= p - 0.05) act = i; });
+    chipsEl.querySelectorAll('.zoom-chip').forEach((b, i) => {
+      const on = i === act;
+      b.classList.toggle('on', on);
+      b.textContent = on ? fmtZ(z) + '×' : fmtZ(presets[i]);
+      b.setAttribute('aria-label', `${fmtZ(presets[i])}倍`);
+      b.setAttribute('aria-pressed', String(on));
+    });
+    readout.textContent = fmtZ(z) + '×';
+    rotateRuler(z);
+  }
+
+  // ---- 目盛りのダイヤル(大きな円の上の一部。いまの倍率が、いつも真上に来るように回す)
+  const R = 520, CX = 180, CY = R + 34, SPAN = 60;   // SPAN: 10倍の幅を何度にするか(対数の目盛り)
+  const angleOf = (z) => SPAN * Math.log10(z / lim().min);
+  function buildRuler() {
+    const { min, max } = lim();
+    ruler.setAttribute('viewBox', '0 0 360 96');
+    let g = '';
+    const total = angleOf(max);
+    for (let a = 0; a <= total + 0.01; a += 2) {
+      const major = presets.some((p) => Math.abs(angleOf(p) - a) < 1);
+      g += `<line x1="${CX}" y1="${CY - R}" x2="${CX}" y2="${CY - R + (major ? 14 : 8)}" transform="rotate(${a} ${CX} ${CY})" class="${major ? 'mj' : ''}"/>`;
+    }
+    for (const p of presets) g += `<text x="${CX}" y="${CY - R + 30}" transform="rotate(${angleOf(p)} ${CX} ${CY})">${fmtZ(p)}</text>`;
+    ruler.innerHTML = `<g class="zr">${g}</g><path class="zr-mark" d="M${CX - 5} ${CY - R - 9} L${CX + 5} ${CY - R - 9} L${CX} ${CY - R - 2}Z"/>`;
+    void min;
+  }
+  function rotateRuler(z) {
+    const g = ruler.querySelector('.zr');
+    if (g) g.setAttribute('transform', `rotate(${-angleOf(z)} ${CX} ${CY})`);
+  }
+
+  // ---- 値を変える(1コマに1回だけ。カメラの設定変更は重い)
+  let want = null, raf = 0;
+  const push = () => {
+    raf = 0;
+    if (want === null || Math.abs(val() - want) < 1e-6) return;
+    range.value = String(want);
+    $('zoomVal').textContent = want.toFixed(1) + '×';
+    renderChips();
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const setZoom = (z) => {
+    const { min, max, step } = lim();
+    want = Math.round(Math.min(max, Math.max(min, z)) / step) * step;
+    want = Number(want.toFixed(3));
+    if (!raf) raf = requestAnimationFrame(push);
+  };
+  let hideTimer = 0;
+  const showDial = () => { ctl.classList.add('dialing'); clearTimeout(hideTimer); };
+  const hideDialSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => ctl.classList.remove('dialing'), 1200); };
+
+  // ボタン: タップで切り替え。押したまま左右になぞるとダイヤル
+  let drag = null;
+  chipsEl.addEventListener('pointerdown', (e) => {
+    drag = { id: e.pointerId, x0: e.clientX, a0: angleOf(val()), moved: false, chip: e.target.closest('.zoom-chip') };
+    try { chipsEl.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  });
+  chipsEl.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0;
+    if (!drag.moved) { if (Math.abs(dx) < 6) return; drag.moved = true; showDial(); }
+    setZoom(lim().min * Math.pow(10, (drag.a0 - dx * 0.25) / SPAN));   // 左へなぞると拡大(ダイヤルが左へ回る)
+  });
+  const endDrag = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag; drag = null;
+    if (!d.moved && d.chip) setZoom(presets[Number(d.chip.dataset.i)]);
+    hideDialSoon();
+  };
+  chipsEl.addEventListener('pointerup', endDrag);
+  chipsEl.addEventListener('pointercancel', endDrag);
+
+  // ピンチ: 2本の指の間隔の比で、倍率を変える
+  const pts = new Map();
+  let pinch = null;
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  wrap.addEventListener('pointerdown', (e) => {
+    if (ctl.hidden || e.target.closest('button, input, #startPanel, .zoom-ctl')) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) { pinch = { d0: dist(), z0: val() }; showDial(); }
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2) setZoom(pinch.z0 * dist() / Math.max(1, pinch.d0));
+  });
+  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2 && pinch) { pinch = null; hideDialSoon(); } };
+  wrap.addEventListener('pointerup', up);
+  wrap.addEventListener('pointercancel', up);
+
+  // main.js がカメラに合わせて範囲や値を変えたとき(開始時・保存した倍率の復元)も、表示を合わせる
+  new MutationObserver(() => requestAnimationFrame(renderChips)).observe($('zoomVal'), { childList: true, characterData: true, subtree: true });
+  new MutationObserver(() => { key = ''; requestAnimationFrame(renderChips); }).observe(ctl, { attributes: true, attributeFilter: ['hidden'] });
+  new MutationObserver(() => { key = ''; requestAnimationFrame(renderChips); }).observe(range, { attributes: true, attributeFilter: ['min', 'max'] });
+  renderChips();
 }
 
 // ---------------------------------------------------------------- リアルタイム指標(撮影中、映像の上)

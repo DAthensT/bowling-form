@@ -48,10 +48,13 @@
             <button type="button" class="hud-head" aria-expanded="true">リアルタイム指標</button>
             <div id="liveMetrics" class="muted">人物を検出中…</div>
           </div>
-          <!-- 撮影の倍率: 映像を見ながら合わせる(iPhone のカメラと同じく、映像の上に出す)。丸いボタンをタップでスライダー、2本指のピンチでも変わる(js/ui.js) -->
+          <!-- 撮影の倍率(iPhone のカメラと同じ操作。js/ui.js):
+               倍率のボタンをタップで切り替え。ボタンを押したまま左右になぞると、目盛りのダイヤルで細かく調整。2本指のピンチでも変わる -->
           <div class="zoom-ctl" id="zoomField" hidden>
-            <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" aria-label="撮影の倍率">
-            <button type="button" class="zoom-pill" aria-label="撮影の倍率を変える"><b id="zoomVal">1.0×</b></button>
+            <div class="zoom-dial" aria-hidden="true"><div class="zoom-readout"></div><svg class="zoom-ruler"></svg></div>
+            <div class="zoom-chips" role="group" aria-label="撮影の倍率"></div>
+            <input id="zoom" class="zoom-range" type="range" min="1" max="1" step="0.1" value="1" aria-label="撮影の倍率">
+            <b id="zoomVal" hidden>1.0×</b>
           </div>
           <div id="startPanel">
             <div class="start-card">
