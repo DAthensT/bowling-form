@@ -33,6 +33,7 @@ export function initUi() {
 
   initHud();
   initZoom();
+  initRunState();
 }
 
 // ---------------------------------------------------------------- 撮影画面の下の引き出し
@@ -45,6 +46,7 @@ function initSheet() {
   const peekEl = side.querySelector('.status-card');
   const portrait = window.matchMedia('(orientation: portrait)');
   let isOpen = false, peek = 0, full = 0, drag = null;
+  let running = false;   // 撮影中か。撮影前は、閉じたときに帯も見せない(開始の画面だけ。開始したら、完成した高さで下からせり上がる)
 
   const enabled = () => portrait.matches;
   /** 閉じたときに見せる高さ = つまみ + 状態の帯 */
@@ -54,7 +56,7 @@ function initSheet() {
     side.style.setProperty('--peek', peek + 'px');
     side.parentElement.style.setProperty('--peek', peek + 'px');   // 倍率のボタンを、帯のすぐ上に置くため
   };
-  const offsetFor = (open) => (open ? 0 : Math.max(0, full - peek));
+  const offsetFor = (open) => (open ? 0 : running ? Math.max(0, full - peek) : full + 24);
   const apply = (animate) => {
     if (!enabled()) { side.style.transform = ''; side.classList.remove('sheet-open'); return; }
     side.style.transition = animate ? 'transform .32s cubic-bezier(.2,.8,.2,1)' : 'none';
@@ -63,7 +65,9 @@ function initSheet() {
     grip.setAttribute('aria-expanded', String(isOpen));
     if (!isOpen) side.scrollTop = 0;
   };
-  const set = (open) => { isOpen = open; measure(); apply(true); };
+  let slideUntil = 0;   // 動かしている最中に高さが変わっても(停止ボタンが出るなど)、動きを止めずに行き先だけ直す
+  const set = (open) => { isOpen = open; measure(); slideUntil = performance.now() + 400; apply(true); };
+  const refit = () => { measure(); if (!drag) apply(performance.now() < slideUntil); };
 
   // 指の動き(つまみと状態の帯の上だけ。中身のスクロールとぶつからないように)
   const onDown = (e) => {
@@ -77,7 +81,7 @@ function initSheet() {
     const dy = e.clientY - drag.y0;
     if (!drag.moved) { if (Math.abs(dy) < 6) return; drag.moved = true; side.style.transition = 'none'; }
     drag.pts.push([e.clientY, performance.now()]); if (drag.pts.length > 6) drag.pts.shift();
-    const y = Math.min(full - peek, Math.max(0, drag.base + dy));
+    const y = Math.min(offsetFor(false), Math.max(0, drag.base + dy));
     side.style.transform = `translateY(${y}px)`;
   };
   const onUp = (e) => {
@@ -87,7 +91,7 @@ function initSheet() {
     const a = d.pts[0], b = d.pts[d.pts.length - 1];
     const v = (b[0] - a[0]) / Math.max(1, b[1] - a[1]);   // px/ms(上向きが負)
     const y = d.base + (e.clientY - d.y0);
-    set(Math.abs(v) > 0.3 ? v < 0 : y < (full - peek) / 2);
+    set(Math.abs(v) > 0.3 ? v < 0 : y < offsetFor(false) / 2);
   };
   for (const el of [grip, peekEl]) {
     el.addEventListener('pointerdown', onDown);
@@ -97,11 +101,37 @@ function initSheet() {
   }
 
   // 帯の高さ(停止ボタンが出る・メッセージが長いなど)や画面の向きが変わったら、合わせ直す
-  new ResizeObserver(() => { measure(); apply(false); }).observe(peekEl);
-  new ResizeObserver(() => { measure(); apply(false); }).observe(side);
+  new ResizeObserver(refit).observe(peekEl);
+  new ResizeObserver(refit).observe(side);
   portrait.addEventListener('change', () => { measure(); apply(false); });
   measure(); apply(false);
-  return { open: () => set(true), close: () => set(false) };
+  return {
+    open: () => set(true),
+    close: () => set(false),
+    /** 撮影の開始・停止。開始したら帯を下からせり上げ、停止したら下へしまう */
+    setRunning: (on) => { if (running === on) return; running = on; if (!on) isOpen = false; measure(); slideUntil = performance.now() + 400; apply(true); },
+  };
+}
+
+// ---------------------------------------------------------------- 撮影の開始・停止の見え方
+// 開始の画面(#startPanel)が消えたら撮影中。開始の画面はフェードで消し、映像もフェードで出す。
+// 開始するまでの進み具合(モデルの読み込み・カメラの起動)と、開始できなかった理由は、開始の画面の中に出す
+function initRunState() {
+  const live = document.querySelector('.live'), panel = $('startPanel'), status = panel.querySelector('.start-status');
+  const initialMsg = $('message').textContent;
+  const sync = () => {
+    const on = panel.hidden;
+    live.classList.toggle('running', on);
+    sheet.setRunning(on);
+  };
+  new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+  const mirror = () => {
+    const t = $('message').textContent;
+    status.textContent = panel.hidden || t === initialMsg || t === '停止中' ? '' : t;
+  };
+  new MutationObserver(mirror).observe($('message'), { childList: true, characterData: true, subtree: true });
+  new MutationObserver(() => $('startBtn').classList.toggle('loading', $('startBtn').disabled)).observe($('startBtn'), { attributes: true, attributeFilter: ['disabled'] });
+  sync(); mirror();
 }
 
 // ---------------------------------------------------------------- 撮影の倍率(映像の上。iPhone のカメラと同じ操作)

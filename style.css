@@ -232,6 +232,16 @@ nav button:active:not(:disabled) { transform: none; opacity: .7; }
 .zoom-ruler line.mj { stroke: #fff; stroke-width: 1.8; }
 .zoom-ruler text { fill: #fff; font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
 .zoom-ruler .zr-mark { fill: var(--warn); }
+/* 開始の瞬間: 開始の画面の中で進み具合を見せ、開始したら映像・指標・倍率をフェードで出す(ぱっと切り替えない) */
+.start-status { min-height: 1.5em; margin: 0; color: var(--fg-2); font-size: 13px; }
+.start-status:empty { visibility: hidden; }
+button.loading { pointer-events: none; }
+button.loading::before { content: ''; width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+  animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.live.running #stage, .live.running .hud, .live.running .zoom-ctl:not([hidden]) { animation: fadein .45s ease-out; }
+/* 状態のメッセージは2行分の高さで固定(文の長さで、下の帯が伸び縮みしないように) */
+#message { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: calc(2 * 1.6em); }
 .sheet-grip { display: none; }
 @media (orientation: portrait) {
   .live { position: relative; display: block; }
