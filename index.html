@@ -63,6 +63,8 @@
           </div>
         </div>
         <aside class="side">
+          <!-- 縦向きでは、下から引き出すパネル(js/ui.js)。つまみを上へスライドかタップで開く -->
+          <button type="button" class="sheet-grip" aria-label="直近の投球と撮影の設定を引き出す" aria-expanded="false"><span class="chev"></span></button>
           <div class="card status-card">
             <div class="state">
               <span id="stateDot" class="dot s-info"></span><b id="stateLabel">停止中</b>
@@ -226,25 +228,21 @@
 
   <!-- 履歴の詳細(分析結果) -->
   <div id="detail" hidden>
-    <header class="detail-bar">
-      <button id="detailClose" class="back-btn" aria-label="動画へ戻る"><svg class="ic"><use href="#i-back"/></svg>動画へ</button>
-      <div class="detail-head"><b id="detailTitle"></b><span id="detailPos"></span></div>
-      <button id="detailLike" class="icon-btn like" aria-pressed="false" aria-label="いいね">♡</button>
+    <!-- 上の左は、縮めた動画(連続再生の動画をそのまま使う。js/shorts.js)が重なる枠。右に日時と操作 -->
+    <header class="detail-top">
+      <div class="mini-slot" aria-hidden="true"></div>
+      <div class="detail-meta">
+        <div class="detail-acts">
+          <button id="detailClose" class="pill-btn" aria-label="動画を大きく戻す"><svg class="ic"><use href="#i-expand"/></svg>動画へ</button>
+          <button id="detailLike" class="icon-btn like" aria-pressed="false" aria-label="いいね">♡</button>
+        </div>
+        <b id="detailTitle"></b>
+        <span id="detailPos"></span>
+        <p class="mini-hint">動画をタップすると、大きく戻ります</p>
+      </div>
     </header>
     <div class="detail-inner">
-      <div id="detailStage">
-        <video id="detailVideo" playsinline></video><canvas id="detailOverlay"></canvas>
-        <!-- 再生の操作(連続再生の画面とそろえた見た目。js/ui.js) -->
-        <div class="vc-big" aria-hidden="true"><svg class="ic"><use href="#i-play"/></svg></div>
-        <div class="vc">
-          <button type="button" class="vc-play" aria-label="再生"><svg class="ic"><use href="#i-play"/></svg></button>
-          <span class="vc-time">0:00</span>
-          <input type="range" class="vc-seek" min="0" max="1" step="0.01" value="0" aria-label="再生位置">
-          <span class="vc-dur">0:00</span>
-          <button type="button" class="vc-full" aria-label="全画面"><svg class="ic"><use href="#i-expand"/></svg></button>
-        </div>
-      </div>
-      <label class="field check switch compact"><input type="checkbox" id="detailPose" checked><span>骨格を重ねて表示<small>腕が検出できているかの確認用</small></span></label>
+      <input type="checkbox" id="detailPose" checked hidden>
 
       <section class="card">
         <h3 class="card-title">講評</h3>
@@ -296,7 +294,7 @@
     <div class="sv-burst" aria-hidden="true">♥</div>
     <div class="sv-playicon" aria-hidden="true">▶</div>
     <div class="sv-diag" hidden></div>
-    <div class="sv-info"><b class="sv-title"></b><span class="sv-sub"></span></div>
+    <div class="sv-info"><span class="sv-time"><span class="sv-tcur">0:00.0</span><span class="sv-tsep"> / </span><span class="sv-tdur">0:00.0</span></span><b class="sv-title"></b><span class="sv-sub"></span></div>
     <div class="sv-bar" role="slider" aria-label="再生位置"><div class="sv-track"><div class="sv-fill"></div></div></div>
   </div>
 

@@ -16,11 +16,14 @@ const EDGE_RESIST = 0.3;   // 前後がない端での、指に付いてくる�
 // 再生の許可を取るための、ごく小さい無音の動画(64×64・3コマ)。ビューアを開くタップの中で再生して、要素に許可をもらう
 const SILENT = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDFpc29tAAAAKHV1aWRcpwj7Mo5CBahhZQ7KCpWWAAAADDEwLjAuMjYzMDAuMAAAAXltZGF0AAAAAAAAABAAAAACCRAAAAAzBgUvAvhhUPxwQXK3Mkjzpyo9NE1pY3Jvc29mdCBILjI2NCBFbmNvZGVyIFYxLjUuMwCAAAAA6gYF5suyE5KYc0PaqKbHQpg1bPVzcmM6MyBoOjY0IHc6NjQgZnBzOjEwLjAwMCBwZjo2NiBsdmw6MCBiOjAgYnFwOjMgZ29wOjMwIGlkcjozMCBzbGM6MSBjbXA6MCByYzoxIHFwOjI2IHJhdGU6NDA5NjAgcGVhazowIGJ1ZmY6MTUzNjAgcmVmOjIgc3JjaDozMiBhc3JjaDoxIHN1YnA6MSBwYXI6NiAzIDMgcm5kOjAgY2FiYWM6MCBscDoyIGN0bnQ6MCBhdWQ6MSBsYXQ6MCB3cms6MTYgdnVpOjEgbHlyOjEgPDwAgAAAABpliIBL///w9FAAECP3it99YrXXXXXXXXXXXgAAAAIJMAAAAAZhmgOXhGAAAAACCTAAAAAGYZoFl4RgAAACy21vb3YAAABsbXZoZAAAAADnJ/3f5yf93wAAJxAAAAu4AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAISdHJhawAAAFx0a2hkAAAAAecn/d/nJ/3fAAAAAQAAAAAAAAu4AAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABrm1kaWEAAAAgbWRoZAAAAADnJ/3f5yf93wAAJxAAAAu4VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAVltaW5mAAAAFHZtaGQAAAABAAAAAAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAAEZc3RibAAAAJVzdHNkAAAAAAAAAAEAAACFYXZjMQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAAQpBVkMgQ29kaW5nAAAAAAAAAAAAAAAAAAAAAAAAAAAAABj//wAAAC9hdmNDAULACv/hABhnQsAKlbEJsBEAAAMAAQAAAwAUDaCIRuABAARoyo8gAAAAGHN0dHMAAAAAAAAAAQAAAAMAAAPoAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAADAAAAAQAAACBzdHN6AAAAAAAAAAAAAAADAAABSQAAABAAAAAQAAAAFHN0Y28AAAAAAAAAAQAAAFAAAAAUc3RzcwAAAAAAAAABAAAAAQAAAEV1ZHRhAAAANW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXIAAAAAAAAAAAAAAAAAAAAACGlsc3QAAAAIWHRyYQ==';
 
-export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, getPoster, onExit, onDetail }) {
+export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, getPoster, onExit, onDetail, onRestore, getMiniSlot }) {
   const q = (s) => root.querySelector(s);
   const stage = q('.sv-stage'), bar = q('.sv-bar'), fill = q('.sv-fill'), poseBtn = q('.sv-pose'), exitBtn = q('.sv-exit');
   const likeBtn = q('.sv-like'), burst = q('.sv-burst'), detailBtn = q('.sv-detail'), diagEl = q('.sv-diag');
   const titleEl = q('.sv-title'), subEl = q('.sv-sub'), posEl = q('.sv-posn');
+  const tCurEl = q('.sv-tcur'), tDurEl = q('.sv-tdur');
+  let mini = false;   // 「詳細」で、動画を左上に縮めて分析結果を見ている
+  const fmtT = (s) => { if (!Number.isFinite(s) || s < 0) s = 0; const m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`; };
   let ids = [], cur = 0, drag = 0, W = 0, H = 0;
   let isOpen = false, animating = false, raf = 0, wheelAt = 0;
   const cards = new Map();
@@ -217,6 +220,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
 
   // ---- 指の動き
   root.addEventListener('pointerdown', (e) => {
+    if (mini) { if (e.target.closest('.sv-box')) restore(); return; }
     if (!isOpen || animating || g || e.target.closest('button, .sv-bar')) return;
     g = { id: e.pointerId, y0: e.clientY, moved: false, pts: [[e.clientY, performance.now()]] };
     try { root.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -274,7 +278,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
 
   // ---- PC の操作
   root.addEventListener('wheel', (e) => {
-    if (!isOpen) return;
+    if (!isOpen || mini) return;
     e.preventDefault();
     const now = performance.now();
     if (animating || Math.abs(e.deltaY) < 8 || now - wheelAt < 450) return;
@@ -282,6 +286,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   }, { passive: false });
   document.addEventListener('keydown', (e) => {
     if (!isOpen) return;
+    if (mini) { if (e.key === 'Escape') { restore(); e.preventDefault(); } return; }
     if (e.key === 'ArrowDown' || e.key === 'PageDown') step(1);
     else if (e.key === 'ArrowUp' || e.key === 'PageUp') step(-1);
     else if (e.key === ' ') togglePlay();
@@ -289,11 +294,57 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     else return;
     e.preventDefault();
   });
-  window.addEventListener('resize', () => { if (!isOpen) return; measure(); for (const c of cards.values()) fit(c); layout(false); });
+  window.addEventListener('resize', () => { if (!isOpen) return; measure(); for (const c of cards.values()) fit(c); layout(false); if (mini) placeMini(false); });
 
   poseBtn.addEventListener('click', () => { setPose(!getPose()); });
   exitBtn.addEventListener('click', () => close());
-  detailBtn.addEventListener('click', () => close(onDetail));
+  detailBtn.addEventListener('click', () => minimize());
+
+  // ---- 「詳細」: 動画を止めずに左上へ縮め、下に分析結果を出す。縮めた動画をタップすると戻る
+  function miniSize(c) {
+    const [vw, vh] = dims(c);
+    const maxH = H > W ? Math.min(H * 0.3, 260) : Math.min(H * 0.5, 220);   // 横向きの画面では、高さに余裕がないので割合を大きく
+    const s = Math.min(Math.min(W * 0.4, 180) / vw, maxH / vh);
+    return { w: Math.round(vw * s), h: Math.round(vh * s) };
+  }
+  /** 縮めた動画を、分析結果の画面の枠(getMiniSlot)にぴったり重ねる */
+  function placeMini(animate) {
+    const c = curCard(), slot = getMiniSlot && getMiniSlot();
+    if (!c || !slot) return;
+    const box = c.box;
+    box.style.transition = 'none'; box.style.transform = '';
+    const r = box.getBoundingClientRect(), t = slot.getBoundingClientRect();
+    if (!r.width) return;
+    void box.offsetWidth;
+    box.style.transformOrigin = '0 0';
+    box.style.transition = animate ? `transform 320ms ${EASE}` : 'none';
+    const k = t.width / r.width;
+    box.style.borderRadius = `${14 / k}px`;   // 縮めたあとに、角が丸く見えるように(縮める前の大きさで指定する)
+    box.style.transform = `translate(${t.left - r.left}px, ${t.top - r.top}px) scale(${k})`;
+  }
+  function minimize() {
+    const c = curCard();
+    if (!isOpen || mini || animating || !c || !c.rec) return;
+    mini = true;
+    clearTimeout(tapTimer); tapTimer = 0;
+    root.classList.add('mini');
+    onDetail(ids[cur], miniSize(c));
+    requestAnimationFrame(() => placeMini(true));
+  }
+  function restore() {
+    if (!mini) return;
+    mini = false;
+    root.classList.remove('mini');
+    const c = curCard();
+    if (c) { c.box.style.transition = `transform 320ms ${EASE}`; c.box.style.transform = ''; c.box.style.borderRadius = ''; }
+    updateInfo();
+    if (onRestore) onRestore();
+  }
+  /** ほかの画面で、いいねを切り替えたとき */
+  function syncLike(id, on) {
+    for (const c of cards.values()) if (c.rec && c.rec.id === id) c.rec.liked = on;
+    reflectLike();
+  }
 
   // ---- 描画: 骨格の重ね表示と進行バー。1回の失敗で、描画の繰り返しが止まらないようにする(止まると、骨格も進行バーも固まる)
   function frame() {
@@ -314,6 +365,9 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
       if (player.duration) {
         const t0 = trimOf(c);
         fill.style.transform = `scaleX(${clamp01((player.currentTime - t0) / Math.max(0.01, player.duration - t0))})`;
+        const a = fmtT(player.currentTime - t0), b = fmtT(player.duration - t0);
+        if (tCurEl.textContent !== a) tCurEl.textContent = a;
+        if (tDurEl.textContent !== b) tDurEl.textContent = b;
       }
     }
     const stopped = !mine || (player.paused && !scrub);
@@ -355,6 +409,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   function close(after = onExit) {
     if (!isOpen) return;
     isOpen = false;
+    mini = false; root.classList.remove('mini');
     burst.classList.remove('go');
     clearTimeout(tapTimer); tapTimer = 0;
     cancelAnimationFrame(raf);
@@ -368,5 +423,5 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     root.hidden = true; root.classList.remove('paused', 'scrubbing');
     after(id);
   }
-  return { open, close, get isOpen() { return isOpen; } };
+  return { open, close, restore, syncLike, get isOpen() { return isOpen; }, get isMini() { return mini; } };
 }

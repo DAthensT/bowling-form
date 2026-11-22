@@ -735,8 +735,7 @@ $('historyList').addEventListener('click', async (e) => {
   shorts.open(cell.dataset.id);   // 選ぶと、動画の連続再生。分析結果は、そこの「詳細」から
 });
 
-let detailUrl = null;
-let detailRaf = 0;
+let detailUrl = null;   // 「動画を保存」用
 let historyIds = []; // 履歴の表示順(上下スワイプで前後の投球へ移るのに使う)
 
 /** 履歴の詳細: 再生位置に合わせて、検出した骨格と局面名を録画に重ねる。検出できていない瞬間は赤く表示する。 */
@@ -775,10 +774,6 @@ function drawOverlay(cv, v, r) {
     }
   }
 }
-function loopDetail() {
-  drawOverlay($('detailOverlay'), $('detailVideo'), openRecord);
-  detailRaf = requestAnimationFrame(loopDetail);
-}
 // ---------------------------------------------------------------- 版ごとの機能
 // 一般公開版('public')は、ここに何も足さない。ローカル版('local')だけ、開発用の機能(local フォルダ)を読み込む。
 let local = { tag: () => '', onHistory() {}, onDetail() {} };
@@ -789,7 +784,14 @@ if (EDITION === 'local') {
   }).catch((e) => console.error('ローカル版の機能を読み込めませんでした', e));
 }
 
-async function openDetail(id) {
+/**
+ * 分析結果を開く。動画は、連続再生の動画をそのまま左上に縮めて使う(js/shorts.js)。
+ * mini: 縮めた動画の大きさ。左上の枠(.mini-slot)を、この大きさにする
+ */
+async function openDetail(id, mini) {
+  if (mini) { $('detail').style.setProperty('--mini-w', mini.w + 'px'); $('detail').style.setProperty('--mini-h', mini.h + 'px'); }
+  $('detail').scrollTop = 0;
+  $('detail').hidden = false;   // 枠の位置を、すぐ測れるように先に出す
   const r = await getThrowL(id);
   if (!r) return;
   if (detailUrl) { URL.revokeObjectURL(detailUrl); detailUrl = null; }
@@ -814,17 +816,9 @@ async function openDetail(id) {
       (d.followMeasured ? '測定できました' : '測れませんでした(リリース後の腕を十分に検出できていません)')
     : '(この記録には解析の詳細がありません)');
   detailUrl = URL.createObjectURL(r.video);
-  const v = $('detailVideo');
-  v.addEventListener('loadedmetadata', () => { $('detailOverlay').width = v.videoWidth; $('detailOverlay').height = v.videoHeight; }, { once: true });
-  cancelAnimationFrame(detailRaf);
-  detailRaf = requestAnimationFrame(loopDetail);
-  v.src = detailUrl;
-  // 確保した録画の先頭には余分な映像が付くので、動き出しの少し前から再生する
-  v.addEventListener('loadedmetadata', () => { try { v.currentTime = r.trimStart; } catch { /* ignore */ } }, { once: true });
   const ext = (r.mime || '').includes('mp4') ? 'mp4' : 'webm';
   $('dlBtn').href = detailUrl;
   $('dlBtn').download = `throw-${new Date(r.date).toISOString().replace(/[:.]/g, '-')}.${ext}`;
-  $('detail').hidden = false;
 }
 
 function renderDetailAi() {
@@ -835,21 +829,20 @@ function renderDetailAi() {
   $('reAi').disabled = r.aiStatus === 'pending' || r.aiStatus === 'streaming';
 }
 
-/** 詳細を閉じる。back が true なら、見ていた投球の動画(連続再生)に戻る */
-function closeDetail(back = true) {
-  const backTo = openRecord && openRecord.id;
-  cancelAnimationFrame(detailRaf);
+/** 分析結果の画面を隠す(動画は、連続再生の側にある) */
+function hideDetail() {
+  if ($('detail').hidden) return;
   $('detail').hidden = true;
-  const v = $('detailVideo');
-  v.pause();
-  v.removeAttribute('src');
-  v.load();
   if (detailUrl) URL.revokeObjectURL(detailUrl);
   detailUrl = null;
   openRecord = null;
   stopSpeech();
-  renderHistory();
-  if (back && backTo) shorts.open(backTo);
+}
+/** 詳細を閉じる。back が true なら、縮めた動画を元の大きさに戻す。false なら(削除したとき)、履歴まで戻る */
+function closeDetail(back = true) {
+  hideDetail();
+  if (back) shorts.restore();
+  else shorts.close(() => renderHistory());
 }
 
 $('detailClose').addEventListener('click', () => closeDetail(true));
@@ -861,6 +854,7 @@ async function setLiked(id, on) {
   if (on) map[id] = true; else delete map[id];
   settings.set('likes', map);
   if (openRecord && openRecord.id === id) { openRecord.liked = !!on; reflectDetailLike(); }
+  if (shorts.isOpen) shorts.syncLike(id, !!on);
 }
 function reflectDetailLike() {
   const on = !!(openRecord && openRecord.liked);
@@ -885,7 +879,9 @@ const shorts = createShorts({
   setLiked,
   getPoster: (id) => thumbCache()[id] || '',
   onExit: () => renderHistory(),
-  onDetail: (id) => openDetail(id),
+  onDetail: (id, mini) => openDetail(id, mini),
+  onRestore: () => hideDetail(),
+  getMiniSlot: () => document.querySelector('#detail .mini-slot'),
 });
 $('reAi').addEventListener('click', () => { if (openRecord) runAI(openRecord); });
 $('speakBtn').addEventListener('click', () => {
