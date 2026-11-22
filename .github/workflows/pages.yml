@@ -26,6 +26,8 @@ jobs:
         run: node test/sim.mjs
       - name: Inbox (video upload) server
         run: node test/inbox.mjs
+      - name: Power saving (rate governor)
+        run: node test/power.mjs
       - name: Edition split (public vs local)
         run: node test/editions.mjs
 

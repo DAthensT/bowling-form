@@ -29,6 +29,7 @@
         <aside class="side">
           <div class="state"><span id="stateDot" class="dot s-good"></span><b id="stateLabel">停止中</b>
             <span id="fps" class="muted"></span>
+            <button id="dimBtn" class="small" hidden title="撮影を続けたまま画面を真っ黒にして、電池を節約します">画面を暗く</button>
             <button id="stopBtn" class="small" hidden>停止</button></div>
           <p id="message" class="muted">「カメラを開始」を押してください</p>
           <label class="field">利き手
@@ -161,6 +162,11 @@
     <button data-tab="presets">お手本</button>
     <button data-tab="settings">設定</button>
   </nav>
+
+  <!-- 撮影中の省電力: 真っ黒の画面(タップで戻る) -->
+  <div id="dim" hidden>
+    <p id="dimState"></p><p id="dimMsg"></p><p id="dimCount"></p><p class="dim-hint">画面をタップすると戻ります</p>
+  </div>
 
   <!-- 縦スワイプの連続再生(js/shorts.js) -->
   <div id="shorts" hidden>

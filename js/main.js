@@ -10,6 +10,7 @@ import { PresenceFilter } from './presence.js';
 import { compare, selectHistory } from './trend.js';
 import { EDITION } from './edition.js';
 import { createShorts } from './shorts.js';
+import { RateGovernor } from './power.js';
 import { speak, stopSpeech, unlockSpeech, setVoiceEnabled } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
@@ -33,9 +34,11 @@ let history = [];        // 姿勢の時系列
 let snaps = [];          // 局面画像用のスナップショット {t, data(JPEG base64)}
 let lastSnap = 0;
 let lastHud = 0;
+let lastHudHtml = '';
 let state = 'idle';      // idle | recording | analyzing
 let detectedStart = 0;
 let detectedEnd = null;  // 助走の終わり(検知器が終了を検知した時刻)。リリースを探す範囲の上限に使う
+let sessionThrows = 0;   // この撮影で保存した投球の数(暗い画面に出す)
 let lastRecord = null;   // 撮影タブに表示中の直近の投球
 let openRecord = null;   // 履歴の詳細画面に表示中の投球
 let activePreset = null; // 使用中のお手本プリセット(現在の撮影位置と一致するもののみ)
@@ -175,11 +178,15 @@ async function startCamera() {
     detector = makeDetector();
     presence = new PresenceFilter();
     history = []; snaps = [];
+    governor.reset(performance.now() / 1000);
+    loopGen++;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* 非対応 */ }
 
     running = true;
     $('startPanel').hidden = true;
     $('stopBtn').hidden = false;
+    $('dimBtn').hidden = false;
+    sessionThrows = 0;
     setState('idle', '人が映ると自動で待機します');
     schedule(loop);
   } catch (e) {
@@ -244,6 +251,8 @@ function stopCamera() {
   octx.clearRect(0, 0, overlay.width, overlay.height);
   $('startPanel').hidden = false;
   $('stopBtn').hidden = true;
+  $('dimBtn').hidden = true;
+  setDim(false);
   setState('stopped', '停止中');
 }
 
@@ -251,11 +260,34 @@ $('startBtn').addEventListener('click', startCamera);
 $('stopBtn').addEventListener('click', stopCamera);
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) stopCamera(); });
 
+// ---------------------------------------------------------------- 暗い画面(省電力)
+// 撮影中、画面は電池を一番使う。スマホ(有機ELの機種)は、真っ黒の画面だと、ほとんど電力を使わない。
+// 撮影・検知・録画は、そのまま続く。画面をタップすると戻る。
+let dimmed = false;
+function syncDim() {
+  if (!dimmed) return;
+  $('dimState').textContent = $('stateLabel').textContent;
+  $('dimMsg').textContent = $('message').textContent;
+  $('dimCount').textContent = `この撮影の投球: ${sessionThrows}`;
+}
+function setDim(on) {
+  dimmed = on && running;
+  $('dim').hidden = !dimmed;
+  if (dimmed) { syncDim(); } else { lastHud = 0; lastHudHtml = ''; }
+}
+$('dimBtn').addEventListener('click', () => setDim(true));
+$('dim').addEventListener('click', () => setDim(false));
+
 // ---------------------------------------------------------------- frame loop
 
 const schedule = (cb) => (video.requestVideoFrameCallback
   ? video.requestVideoFrameCallback(() => cb())
   : requestAnimationFrame(() => cb()));
+
+// 消費電力: 動きがないあいだは、姿勢推定を間引く(js/power.js)。動きが出たら、すぐ全コマに戻る
+const governor = new RateGovernor();
+let loopGen = 0;
+let motionNow = 0;   // 動きの量 ÷ 開始のしきい値(人物が見えているときだけ)
 
 function loop() {
   if (!running) return;
@@ -264,13 +296,18 @@ function loop() {
   const t = nowMs / 1000;
   try { frame = pose.detect(video, nowMs); } catch (e) { console.warn('pose error', e); }
   onFrame(frame, t);
-  schedule(loop);
+  const cfg = detector.config;
+  const sig = detector.view === 'rear' ? cfg.rearStartSlope : cfg.startSpeed;
+  motionNow = frame ? Math.abs(detector.signal) / sig : 0;
+  const wait = governor.next(t, { active: detector.isActive || state !== 'idle', motion: motionNow });
+  if (wait > 0) { const gen = loopGen; setTimeout(() => { if (running && gen === loopGen) schedule(loop); }, wait); }  // 停止→開始の直後に、前の撮影の予約が動かないようにする
+  else schedule(loop);
 }
 
 function onFrame(raw, t) {
   // 人物として自然で、連続して見えているフレームだけを検知・解析に使う(誤検知対策)
   const frame = presence.update(raw, t);
-  drawPose(raw, !!frame);
+  if (!dimmed) drawPose(raw, !!frame);
   if (frame) {
     history.push(frame);
     if (history.length > 1500) history.splice(0, 500);
@@ -281,11 +318,12 @@ function onFrame(raw, t) {
   if (ev && ev.type === 'started') onStarted(ev.at);
   else if (ev && ev.type === 'ended') onEnded(ev);
 
-  if (t - lastHud > 0.15) {
+  if (!dimmed && t - lastHud > 0.15) {
     lastHud = t;
     const ms = frame ? instant(frame, hand(), detector.travelDirection, detector.view, activePreset) : [];
-    $('liveMetrics').innerHTML = ms.length ? ms.map(metricRow).join('')
+    const html = ms.length ? ms.map(metricRow).join('')
       : (raw ? '人物か確認中…(人以外のものを検出している可能性があります)' : '人物が見つかりません');
+    if (html !== lastHudHtml) { lastHudHtml = html; $('liveMetrics').innerHTML = html; }   // 同じ内容なら、画面を作り直さない
     if ($('diag').open) renderDiag(raw);
   }
 }
@@ -311,8 +349,10 @@ function drawPose(frame, confirmed) {
   }
 }
 
+// 局面画像は AI の詳細分析(任意)にだけ使う。キーがないときは作らない。動きがないあいだも作らない(JPEG の作成が重い)
 function maybeSnapshot(t) {
   if (t - lastSnap < 0.12 || !video.videoWidth) return;
+  if (!governor.isFull(t) || !settings.get('geminiKey', '')) return;
   lastSnap = t;
   const w = 640, h = Math.round(w * video.videoHeight / video.videoWidth);
   snapCanvas.width = w;
@@ -353,8 +393,9 @@ function setState(s, text) {
   $('stateDot').className = 'dot ' + cls;
   $('stateLabel').textContent = label;
   if (text) setMessage(text);
+  syncDim();
 }
-function setMessage(text) { $('message').textContent = text; }
+function setMessage(text) { $('message').textContent = text; syncDim(); }
 
 function onStarted(at) {
   detectedStart = at;
@@ -400,6 +441,7 @@ async function finishThrow(endAt) {
       aiText: '', aiStatus: 'none', aiModel: ''
     };
     await putThrow(record);
+    sessionThrows++; syncDim();
     lastRecord = record;
     renderLast();
     setState('idle', '保存しました。次の投球を待っています');

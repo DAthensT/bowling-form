@@ -158,3 +158,11 @@ details summary { cursor: pointer; font-size: 13px; color: var(--muted); margin:
 .cell-like { position: absolute; z-index: 2; right: 0; bottom: 0; width: 40px; height: 40px; padding: 0; border: 0; background: none; color: #fff;
   font-size: 20px; line-height: 1; text-shadow: 0 0 4px #000; }
 .cell-like.on { color: #ff3b5c; }
+
+/* 撮影中の省電力: 真っ黒の画面。文字は、暗い灰色の小さなものだけ(有機ELは、黒の部分は発光しない) */
+#dim { position: fixed; inset: 0; z-index: 60; background: #000; color: #4a4a4a; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 24px; font-size: 14px; }
+#dim[hidden] { display: none; }
+#dim p { margin: 0; }
+#dim #dimState { font-size: 18px; }
+#dim .dim-hint { margin-top: 18px; font-size: 12px; color: #333; }
