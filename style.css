@@ -217,7 +217,9 @@ nav button:active:not(:disabled) { transform: none; opacity: .7; }
 /* ダイヤル: なぞっている間とピンチの間だけ、ボタンの列の場所に、画面幅いっぱいの弧の帯として出る(ボタンは消える) */
 .zoom-dial { position: absolute; bottom: -12px; left: 50%; width: 100vw; max-width: 520px; transform: translateX(-50%); opacity: 0;
   pointer-events: none; transition: opacity .18s ease-out; display: flex; flex-direction: column; align-items: center; }
-.zoom-ctl.dialing .zoom-dial { opacity: 1; }
+.zoom-ctl.dialing .zoom-dial { opacity: 1; pointer-events: auto; touch-action: none; cursor: grab; }   /* 出ている間は、帯のどこをつかんでも回せる */
+.zoom-ctl.dialing .zoom-chips { pointer-events: none; }
+#stage { transform-origin: 50% 50%; will-change: transform; }
 .zoom-chips { transition: opacity .15s, transform .18s var(--ease); }
 .zoom-ctl.dialing .zoom-chips { opacity: 0; transform: scale(.9); }
 .zoom-readout { color: var(--warn); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 4px rgba(0, 0, 0, .7);

@@ -186,6 +186,29 @@ function initZoom() {
     if (readout.textContent !== t) readout.textContent = t;
     const g = ruler.querySelector('.zr');
     if (g) g.style.transform = 'rotate(' + (-angleOf(z)).toFixed(3) + 'deg)';
+    updatePreview();
+  }
+
+  // ---- なめらかさ: カメラの倍率は段々にしか変えられない(反映にも少し時間がかかる)。
+  // カメラが追いつくまでの間だけ、プレビューの映像(と骨格)を画面上で拡大・縮小してつなぐ。追いついたら等倍に戻る
+  const stageEl = $('stage'), videoEl = $('video');
+  let camZ = Number(range.value) || 1;   // カメラに反映済みの倍率
+  let camSeq = 0;
+  function updatePreview() {
+    const k = shown / camZ;
+    const t = Math.abs(k - 1) < 0.002 ? '' : 'scale(' + k.toFixed(4) + ')';
+    if (stageEl.style.transform !== t) stageEl.style.transform = t;
+  }
+  /** カメラが倍率 z に変わった。その倍率のコマが画面に出てから(2コマ後)、つなぎの拡大を外す */
+  function cameraCaught(z) {
+    const seq = ++camSeq;
+    const fin = () => { if (seq === camSeq) { camZ = z; updatePreview(); } };
+    if (videoEl.requestVideoFrameCallback) {
+      let n = 0;
+      const cb = () => { if (++n >= 2) fin(); else videoEl.requestVideoFrameCallback(cb); };
+      videoEl.requestVideoFrameCallback(cb);
+      setTimeout(fin, 200);   // コマが来ないときも、外す
+    } else setTimeout(fin, 60);
   }
 
   // ---- カメラへ送る(前の変更が終わってから、最新の値を1つだけ)
@@ -199,9 +222,15 @@ function initZoom() {
     range.value = String(z);
     range.dispatchEvent(new Event('input', { bubbles: true }));
     clearTimeout(guard);
-    guard = setTimeout(applied, 300);   // 反映の知らせが来ない(失敗した)ときも、止まらないように
+    guard = setTimeout(notApplied, 400);   // 反映の知らせが来ない(失敗した)ときも、止まらないように
   }
-  function applied() { clearTimeout(guard); inflight = false; flush(); }
+  function applied() { clearTimeout(guard); inflight = false; cameraCaught(Number(range.value) || camZ); flush(); }
+  /** カメラに反映できなかった: 画面上の拡大で見せている倍率を、本当の倍率に戻す(うそを見せない) */
+  function notApplied() {
+    inflight = false;
+    flush();
+    if (!inflight && !busy && pending === null) { shown = camZ; range.value = String(camZ); render(); }
+  }
   const setShown = (z) => { shown = clampZ(z); render(); pending = quant(shown); flush(); };
 
   // ボタンのタップ: なめらかに切り替える
@@ -218,34 +247,44 @@ function initZoom() {
     anim = requestAnimationFrame(stepF);
   }
 
+  // ダイヤルは、出ている間は帯のどこをつかんでも回せる(指を離しても、少しの間は出たまま)。触らなくなったら消える
+  const dialEl = ctl.querySelector('.zoom-dial');
   let hideTimer = 0;
   const showDial = () => { clearTimeout(hideTimer); ctl.classList.add('dialing'); };
-  const hideDialSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => ctl.classList.remove('dialing'), 900); };
+  const hideDialSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => ctl.classList.remove('dialing'), 1600); };
 
-  // ボタン: タップで切り替え。押したまま左右になぞるとダイヤル
+  // ボタン: タップで切り替え。押したまま左右になぞるとダイヤル。ダイヤルの帯: なぞって回す
   let drag = null;
-  chipsEl.addEventListener('pointerdown', (e) => {
+  const startDrag = (el, onDial) => (e) => {
+    if (drag) return;
     cancelAnimationFrame(anim);
-    drag = { id: e.pointerId, x0: e.clientX, a0: angleOf(shown), moved: false, chip: e.target.closest('.zoom-chip') };
+    drag = { id: e.pointerId, el, x0: e.clientX, a0: angleOf(shown), moved: onDial, chip: onDial ? null : e.target.closest('.zoom-chip') };
     busy = true;
-    try { chipsEl.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-  });
-  chipsEl.addEventListener('pointermove', (e) => {
+    if (onDial) showDial();
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.preventDefault();
+  };
+  const moveDrag = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.x0;
     if (!drag.moved) { if (Math.abs(dx) < 5) return; drag.moved = true; drag.x0 = e.clientX; showDial(); return; }
     // 指の下の目盛りが、指と一緒に動く量(帯の上で 1px ≒ 円周の 1px)
     const degPerPx = (180 / Math.PI) / (R * ruler.getBoundingClientRect().width / VW);
     setShown(zOfAngle(drag.a0 - dx * degPerPx));
-  });
+  };
   const endDrag = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag; drag = null; busy = false;
     if (!d.moved && d.chip) animateTo(presets[Number(d.chip.dataset.i)]);
     else hideDialSoon();
   };
-  chipsEl.addEventListener('pointerup', endDrag);
-  chipsEl.addEventListener('pointercancel', endDrag);
+  for (const [el, onDial] of [[chipsEl, false], [dialEl, true]]) {
+    el.addEventListener('pointerdown', startDrag(el, onDial));
+    el.addEventListener('pointermove', moveDrag);
+    el.addEventListener('pointerup', endDrag);
+    el.addEventListener('pointercancel', endDrag);
+    el.addEventListener('lostpointercapture', endDrag);   // 指の終わりの知らせを取りこぼしても、次の操作が効くように
+  }
 
   // ピンチ: 2本の指の間隔の比で、倍率を変える
   const pts = new Map();
@@ -253,6 +292,7 @@ function initZoom() {
   const dist = () => { const v = [...pts.values()]; return Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y); };
   wrap.addEventListener('pointerdown', (e) => {
     if (ctl.hidden || e.target.closest('button, input, #startPanel, .zoom-ctl')) return;
+    if (pts.size >= 2) { pts.clear(); pinch = null; }
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 2) { cancelAnimationFrame(anim); pinch = { d0: dist(), z0: shown }; busy = true; showDial(); }
   });
@@ -262,15 +302,22 @@ function initZoom() {
     if (pinch && pts.size === 2) setShown(pinch.z0 * dist() / Math.max(1, pinch.d0));
   });
   const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2 && pinch) { pinch = null; busy = false; hideDialSoon(); } };
-  wrap.addEventListener('pointerup', up);
-  wrap.addEventListener('pointercancel', up);
+  // 指を離した知らせは、どこで離しても受け取る(取りこぼすと、残った指で次の操作がピンチと誤認される)
+  window.addEventListener('pointerup', up, true);
+  window.addEventListener('pointercancel', up, true);
 
   // main.js がカメラに反映し終えたとき(#zoomVal が書き換わる)。開始時の、保存した倍率の復元も、これで表示に出る
   new MutationObserver(() => {
+    const ours = inflight;   // この画面から送った変更の反映か(そうでなければ、開始時の復元など)
     applied();
-    if (!busy && pending === null) { shown = Number(range.value) || shown; render(); }
+    if (!ours && !busy && pending === null) { camSeq++; shown = camZ = Number(range.value) || shown; render(); }
   }).observe($('zoomVal'), { childList: true, characterData: true, subtree: true });
-  new MutationObserver(() => { key = ''; shown = Number(range.value) || 1; requestAnimationFrame(render); }).observe(ctl, { attributes: true, attributeFilter: ['hidden'] });
+  new MutationObserver(() => {   // 撮影の開始・停止
+    key = ''; camSeq++;
+    shown = camZ = Number(range.value) || 1;
+    stageEl.style.transform = '';
+    requestAnimationFrame(render);
+  }).observe(ctl, { attributes: true, attributeFilter: ['hidden'] });
   new MutationObserver(() => { key = ''; requestAnimationFrame(render); }).observe(range, { attributes: true, attributeFilter: ['min', 'max'] });
   render();
 }
