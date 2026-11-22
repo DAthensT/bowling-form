@@ -781,6 +781,7 @@ const shorts = createShorts({
   getPose: () => $('detailPose').checked,
   setPose: (on) => { $('detailPose').checked = on; },
   setLiked,
+  getPoster: (id) => thumbCache()[id] || '',
   onExit: () => renderHistory(),
   onDetail: (id) => openDetail(id),
 });

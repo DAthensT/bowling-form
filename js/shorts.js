@@ -9,7 +9,7 @@ const COMMIT_FRAC = 0.2;   // 画面の高さのこれだけ動かしたら次�
 const FLICK_SPEED = 0.35;  // px/ms。これ以上の速さではじいたら次へ
 const EDGE_RESIST = 0.3;   // 前後がない端での、指に付いてくる量
 
-export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, onExit, onDetail }) {
+export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, getPoster, onExit, onDetail }) {
   const q = (s) => root.querySelector(s);
   const stage = q('.sv-stage'), bar = q('.sv-bar'), fill = q('.sv-fill'), poseBtn = q('.sv-pose'), exitBtn = q('.sv-exit');
   const likeBtn = q('.sv-like'), burst = q('.sv-burst'), detailBtn = q('.sv-detail');
@@ -18,6 +18,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   let isOpen = false, animating = false, raf = 0, wheelAt = 0;
   const cards = new Map();
   let g = null, scrub = null, tapTimer = 0, lastTap = 0;
+  let userPaused = false;   // 利用者がタップで止めた。これが false の間は、現在の動画が止まっていたら再生し直す(下の見張り)
 
   const clamp01 = (x) => Math.min(1, Math.max(0, x));
   const curCard = () => cards.get(cur);
@@ -41,16 +42,21 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     const el = document.createElement('div'); el.className = 'sv-card'; el.dataset.i = i;
     const box = document.createElement('div'); box.className = 'sv-box';
     const v = document.createElement('video');
-    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', '');
+    v.muted = true; v.defaultMuted = true; v.playsInline = true; v.preload = 'auto';
+    v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
+    const poster = getPoster && getPoster(ids[i]);
+    if (poster) v.poster = poster;   // 動画の最初のコマが出るまで(iPhone では再生を始めるまで読み込まれない)、サムネイルを見せる
     const cv = document.createElement('canvas');
     box.append(v, cv); el.append(box); stage.append(el);
-    const c = { i, el, box, v, cv, rec: null, url: null };
+    const c = { i, el, box, v, cv, rec: null, url: null, kicked: 0 };
+    fit(c);   // 動画の大きさが分かる前でも、場所を持たせる(0×0 だと、何も見えない)
     v.addEventListener('loadedmetadata', () => {
-      cv.width = v.videoWidth; cv.height = v.videoHeight; fit(c);
+      sizeCard(c);
       try { v.currentTime = trimOf(c); } catch { /* 先頭の映像を出せなくても動く */ }
     });
     // ループ。録画の先頭には余分な映像が付くので、動き出しの少し前に戻す
-    v.addEventListener('ended', () => { try { v.currentTime = trimOf(c); } catch { /* ignore */ } if (c.i === cur && !scrub) play(c); });
+    v.addEventListener('ended', () => { try { v.currentTime = trimOf(c); } catch { /* ignore */ } if (c.i === cur && !scrub && !userPaused) play(c); });
+    v.addEventListener('error', () => console.warn('video error', ids[i], v.error && v.error.code));
     cards.set(i, c);
     place(c, false);
     getThrow(ids[i]).then((rec) => {
@@ -60,12 +66,19 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     });
     return c;
   }
+  /** 動画の大きさに、骨格の canvas と表示の枠を合わせる(分かった時点で、何度呼んでもよい) */
+  function sizeCard(c) {
+    const w = c.v.videoWidth, h = c.v.videoHeight;
+    if (!w || !h) return;
+    if (c.cv.width !== w || c.cv.height !== h) { c.cv.width = w; c.cv.height = h; }
+    fit(c);
+  }
   function destroyCard(c) {
     c.v.pause(); c.v.removeAttribute('src'); c.v.load();
     if (c.url) URL.revokeObjectURL(c.url);
     c.el.remove(); cards.delete(c.i);
   }
-  function play(c) { if (c && c.rec) c.v.play().catch(() => { /* 自動再生できなければ、一時停止の表示のまま。タップで再生 */ }); }
+  function play(c) { if (c && c.rec) c.v.play().catch(() => { /* 失敗しても、見張り(tick)が、現在の動画なら再試行する */ }); }
   // ---- いいね(ボタン、または画面をダブルタップ)
   function reflectLike() {
     const c = curCard(), on = !!(c && c.rec && c.rec.liked);
@@ -89,7 +102,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   }
   function togglePlay() {
     const c = curCard(); if (!c || !c.rec) return;
-    if (c.v.paused) play(c); else c.v.pause();
+    if (c.v.paused) { userPaused = false; play(c); } else { userPaused = true; c.v.pause(); }
   }
 
   function updateInfo() {
@@ -113,7 +126,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     if (!next || animating) return;
     animating = true;
     const old = curCard();
-    cur += dir; drag = 0;
+    cur += dir; drag = 0; userPaused = false;
     clearTimeout(tapTimer); tapTimer = 0;
     try { next.v.currentTime = trimOf(next); } catch { /* ignore */ }
     play(next);
@@ -204,21 +217,39 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   detailBtn.addEventListener('click', () => close(onDetail));
 
   // ---- 描画: 骨格の重ね表示と進行バー。前後のカードにも描いておく(スワイプ中に骨格が遅れて出ないように)
-  function tick() {
-    if (!isOpen) return;
+  // 1回の失敗で、描画の繰り返しが止まらないようにする(止まると、骨格も進行バーも固まる)
+  function frame() {
     const showPose = getPose();
     poseBtn.classList.toggle('off', !showPose);
+    const now = performance.now();
     for (const c of cards.values()) {
-      if (!c.rec || !c.cv.width) continue;
-      if (showPose) draw(c.cv, c.v, c.rec);
-      else c.cv.getContext('2d').clearRect(0, 0, c.cv.width, c.cv.height);
+      if (!c.rec) continue;
+      if (c.v.videoWidth && c.cv.width !== c.v.videoWidth) sizeCard(c);   // loadedmetadata を取りこぼしても、大きさを合わせる
+      if (!c.cv.width) continue;
+      try {
+        if (showPose) draw(c.cv, c.v, c.rec);
+        else c.cv.getContext('2d').clearRect(0, 0, c.cv.width, c.cv.height);
+      } catch (e) { console.warn('overlay draw failed', e); }
     }
     const c = curCard();
-    if (c && c.rec && c.v.duration) {
-      const t0 = trimOf(c);
-      fill.style.transform = `scaleX(${clamp01((c.v.currentTime - t0) / Math.max(0.01, c.v.duration - t0))})`;
+    if (c && c.rec) {
+      if (c.v.duration) {
+        const t0 = trimOf(c);
+        fill.style.transform = `scaleX(${clamp01((c.v.currentTime - t0) / Math.max(0.01, c.v.duration - t0))})`;
+      }
       root.classList.toggle('paused', c.v.paused && !scrub && c.v.readyState >= 2);
+      // 見張り: 利用者が止めていないのに、現在の動画が止まっていたら、再生し直す。
+      // iPhone の Safari は、前後の動画をまだ読み込んでいないことがあり、play() が空振りしたり、読み込みが始まらなかったりする
+      if (!userPaused && !scrub && !g && c.v.paused && !c.v.ended && now - c.kicked > 350) {
+        if (c.kicked && c.v.readyState === 0 && c.v.networkState !== 2) c.v.load();   // 読み込みが始まっていない: 読み込み直す
+        c.kicked = now;
+        play(c);
+      }
     }
+  }
+  function tick() {
+    if (!isOpen) return;
+    try { frame(); } catch (e) { console.warn('viewer frame failed', e); }
     raf = requestAnimationFrame(tick);
   }
 
@@ -226,7 +257,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     ids = getIds().slice();
     const i = ids.indexOf(id);
     if (i < 0) return;
-    cur = i; drag = 0; animating = false; g = null; scrub = null;
+    cur = i; drag = 0; animating = false; g = null; scrub = null; userPaused = false;
     root.hidden = false; isOpen = true;
     measure();
     makeCard(cur); makeCard(cur + 1); makeCard(cur - 1);
