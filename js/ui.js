@@ -56,7 +56,8 @@ function initSheet() {
     side.style.setProperty('--peek', peek + 'px');
     side.parentElement.style.setProperty('--peek', peek + 'px');   // 倍率のボタンを、帯のすぐ上に置くため
   };
-  const offsetFor = (open) => (open ? 0 : running ? Math.max(0, full - peek) : full + 24);
+  // 閉じたとき: 撮影中は「つまみ + 状態の帯」、撮影前は「つまみ」だけを見せる(いつでも引っ張って設定を出せるように)
+  const offsetFor = (open) => (open ? 0 : Math.max(0, full - (running ? peek : grip.offsetHeight + 4)));
   const apply = (animate) => {
     if (!enabled()) { side.style.transform = ''; side.classList.remove('sheet-open'); return; }
     side.style.transition = animate ? 'transform .32s cubic-bezier(.2,.8,.2,1)' : 'none';
