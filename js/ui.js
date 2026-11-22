@@ -201,8 +201,10 @@ function initZoom() {
     overlayEl.style.transform = t;
   }
   function updatePreview() {
-    const k = shown / camZ;
-    setPreviewScale(Math.abs(k - 1) < 0.002 ? '' : 'scale(' + k.toFixed(4) + ')');
+    // 画面上では拡大だけ(縮小すると、カメラが映していない外側が無いので、枠の中に黒い縁が出る)。
+    // カメラが下げた倍率に追いつくまでの一瞬は、その場で待つ
+    const k = Math.max(1, shown / camZ);
+    setPreviewScale(k < 1.002 ? '' : 'scale(' + k.toFixed(4) + ')');
   }
   /** カメラが倍率 z に変わった。その倍率のコマが画面に出てから(2コマ後)、つなぎの拡大を外す */
   function cameraCaught(z) {
@@ -241,8 +243,14 @@ function initZoom() {
   // 指を離したとき・指を止めて少したったときに、1回だけカメラへ送る
   let idleTimer = 0;
   const commit = () => { clearTimeout(idleTimer); pending = quant(shown); flush(); };
-  const setShown = (z) => {
-    shown = clampZ(z); render();
+  // 倍率を下げる操作のときは、カメラを先に低め(floor。なければ今の7割)まで引いておき、画面上の拡大で今の倍率に見せる
+  const setShown = (z, floor) => {
+    shown = clampZ(z);
+    if (busy && shown < Number(range.value) - 0.005) {   // カメラ(送った値)が、見せたい倍率より高い
+      const f = quant(floor !== undefined ? floor : shown * 0.7);
+      if (f < Number(range.value) - 0.005 && (pending === null || f < pending)) { pending = f; flush(); }
+    }
+    render();
     clearTimeout(idleTimer);
     if (busy) idleTimer = setTimeout(commit, 300);
     else commit();
@@ -256,7 +264,7 @@ function initZoom() {
     busy = true;
     const stepF = (now) => {
       const k = Math.min(1, (now - t0) / DUR), e = 1 - Math.pow(1 - k, 3);
-      setShown(from * Math.pow(to / from, e));   // 倍率の比で補間(見た目の拡大の速さが一定になる)
+      setShown(from * Math.pow(to / from, e), to < from ? to : undefined);   // 倍率の比で補間(見た目の拡大の速さが一定になる)。下げるときは、カメラを行き先まで先に引く
       if (k < 1) anim = requestAnimationFrame(stepF); else { busy = false; commit(); }
     };
     anim = requestAnimationFrame(stepF);
