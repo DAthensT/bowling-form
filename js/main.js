@@ -486,6 +486,8 @@ async function finishThrow(endAt) {
     sessionThrows++; syncDim();
     lastRecord = record;
     renderLast();
+    // 履歴を開いているあいだに撮れた投球も、すぐ一覧に出す(連続再生中は、見ている順を崩さないよう戻ったときに)
+    if ($('tab-history').classList.contains('active')) renderHistory();
     setState('idle', '保存しました。次の投球を待っています');
     speak(summaryText + (comparison.summary ? ' ' + comparison.summary : ''), true);
     if (settings.get('ai', true) && settings.get('geminiKey', '')) runAI(record);
