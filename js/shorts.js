@@ -74,7 +74,10 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     const c = { i, el, box, img, cv, rec: null };
     img.addEventListener('load', () => fit(c));
     const poster = getPoster && getPoster(ids[i]);
-    if (poster) img.src = poster;   // 動画が付くまで(付いても、最初のコマが出るまで)、サムネイルを見せる
+    if (poster) {
+      img.src = poster;   // 動画が付くまで(付いても、最初のコマが出るまで)、サムネイルを見せる
+      el.style.setProperty('--poster', `url("${poster}")`);   // 動画の上下・左右の余白に、ぼかしたサムネイルを敷く(見た目だけ)
+    }
     fit(c);
     cards.set(i, c);
     place(c, false);

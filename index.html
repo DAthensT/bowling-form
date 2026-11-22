@@ -29,6 +29,9 @@
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2m-6.5 0 .8 12h7.4l.8-12"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.9L12 18.5l-1.8-5.8-5.7-1.9L10.2 9zM18.5 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5.5v13M15.5 5.5v13"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4.5 9V4.5H9M15 4.5h4.5V9M19.5 15v4.5H15M9 19.5H4.5V15"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 4v16M16 4v16M4 9h4M4 15h4M16 9h4M16 15h4"/></symbol>
   </svg>
 
   <main>
@@ -39,6 +42,11 @@
           <div id="stage">
             <video id="video" playsinline muted autoplay></video>
             <canvas id="overlay"></canvas>
+          </div>
+          <!-- リアルタイム指標: 撮影中だけ、映像の上に重ねる(タップで畳む) -->
+          <div class="hud" id="hud">
+            <button type="button" class="hud-head" aria-expanded="true">リアルタイム指標</button>
+            <div id="liveMetrics" class="muted">人物を検出中…</div>
           </div>
           <div id="startPanel">
             <div class="start-card">
@@ -70,11 +78,6 @@
           <section class="card">
             <h3 class="card-title">直近の投球</h3>
             <div id="last" class="muted">投球するとここに結果が出ます。</div>
-          </section>
-
-          <section class="card">
-            <h3 class="card-title">リアルタイム指標</h3>
-            <div id="liveMetrics" class="muted">人物を検出中…</div>
           </section>
 
           <details class="card setup" id="setup">
@@ -229,7 +232,18 @@
       <button id="detailLike" class="icon-btn like" aria-pressed="false" aria-label="いいね">♡</button>
     </header>
     <div class="detail-inner">
-      <div id="detailStage"><video id="detailVideo" controls playsinline></video><canvas id="detailOverlay"></canvas></div>
+      <div id="detailStage">
+        <video id="detailVideo" playsinline></video><canvas id="detailOverlay"></canvas>
+        <!-- 再生の操作(連続再生の画面とそろえた見た目。js/ui.js) -->
+        <div class="vc-big" aria-hidden="true"><svg class="ic"><use href="#i-play"/></svg></div>
+        <div class="vc">
+          <button type="button" class="vc-play" aria-label="再生"><svg class="ic"><use href="#i-play"/></svg></button>
+          <span class="vc-time">0:00</span>
+          <input type="range" class="vc-seek" min="0" max="1" step="0.01" value="0" aria-label="再生位置">
+          <span class="vc-dur">0:00</span>
+          <button type="button" class="vc-full" aria-label="全画面"><svg class="ic"><use href="#i-expand"/></svg></button>
+        </div>
+      </div>
       <label class="field check switch compact"><input type="checkbox" id="detailPose" checked><span>骨格を重ねて表示<small>腕が検出できているかの確認用</small></span></label>
 
       <section class="card">
