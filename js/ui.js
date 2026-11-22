@@ -37,44 +37,55 @@ export function initUi() {
 }
 
 // ---------------------------------------------------------------- 撮影画面の下の引き出し
-// 縦向きのときだけ。閉じているときは、上の帯(つまみ・状態・停止ボタン)だけが見えている。
-// つまみ・帯を上へスライド(またはタップ)で開き、下へスライドで閉じる。開いている中身は、その中でスクロールできる。
+// 縦向きのときだけ。高さは3段:
+//   open: 全部(直近の投球・撮影の設定)  peek: つまみ + 状態の帯(停止ボタンなど)  min: つまみだけ(状態は、つまみの横に小さく)
+// 撮影前は open / min の2段、撮影中は3段。つまみ・帯を上下にスライド(はじくと次の段へ)、つまみのタップで1段上へ(一番上なら閉じる)。
 // 横向きのときは、これまでどおり右側の欄(引き出しにはしない)。
 function initSheet() {
   const side = document.querySelector('.side');
   const grip = side.querySelector('.sheet-grip');
   const peekEl = side.querySelector('.status-card');
   const portrait = window.matchMedia('(orientation: portrait)');
-  let isOpen = false, peek = 0, full = 0, drag = null;
-  let running = false;   // 撮影中か。撮影前は、閉じたときに帯も見せない(開始の画面だけ。開始したら、完成した高さで下からせり上がる)
+  let state = 'min', peek = 0, full = 0, drag = null;
+  let running = false;   // 撮影中か
+  let closedState = 'peek';   // 撮影中に閉じたときの段(最小化したら、それを覚えておく)
 
   const enabled = () => portrait.matches;
-  /** 閉じたときに見せる高さ = つまみ + 状態の帯 */
+  const gripH = () => grip.offsetHeight + 4;
+  /** 帯の高さ = つまみ + 状態の帯 */
   const measure = () => {
     peek = Math.ceil(grip.offsetHeight + peekEl.offsetHeight + 2);
     full = side.offsetHeight;
     side.style.setProperty('--peek', peek + 'px');
-    side.parentElement.style.setProperty('--peek', peek + 'px');   // 倍率のボタンを、帯のすぐ上に置くため
   };
-  // 閉じたとき: 撮影中は「つまみ + 状態の帯」、撮影前は「つまみ」だけを見せる(いつでも引っ張って設定を出せるように)
-  const offsetFor = (open) => (open ? 0 : Math.max(0, full - (running ? peek : grip.offsetHeight + 4)));
+  const states = () => (running ? ['min', 'peek', 'open'] : ['min', 'open']);
+  const offsetFor = (s) => (s === 'open' ? 0 : Math.max(0, full - (s === 'peek' ? peek : gripH())));
   const apply = (animate) => {
-    if (!enabled()) { side.style.transform = ''; side.classList.remove('sheet-open'); return; }
+    if (!enabled()) { side.style.transform = ''; side.classList.remove('sheet-open', 'sheet-min'); side.parentElement.style.removeProperty('--peek'); return; }
+    if (!states().includes(state)) state = running ? 'peek' : 'min';
     side.style.transition = animate ? 'transform .32s cubic-bezier(.2,.8,.2,1)' : 'none';
-    side.style.transform = `translateY(${offsetFor(isOpen)}px)`;
-    side.classList.toggle('sheet-open', isOpen);
-    grip.setAttribute('aria-expanded', String(isOpen));
-    if (!isOpen) side.scrollTop = 0;
+    const off = offsetFor(state);
+    side.style.transform = `translateY(${off}px)`;
+    side.classList.toggle('sheet-open', state === 'open');
+    side.classList.toggle('sheet-min', state === 'min' && running);
+    grip.setAttribute('aria-expanded', String(state === 'open'));
+    if (state !== 'open') side.scrollTop = 0;
+    // 倍率のボタンを、見えている帯のすぐ上に置く(開いているときは、帯の高さのまま)
+    side.parentElement.style.setProperty('--peek', (state === 'open' ? peek : full - off) + 'px');
   };
   let slideUntil = 0;   // 動かしている最中に高さが変わっても(停止ボタンが出るなど)、動きを止めずに行き先だけ直す
-  const set = (open) => { isOpen = open; measure(); slideUntil = performance.now() + 400; apply(true); };
+  const set = (s) => {
+    state = s;
+    if (running && s !== 'open') closedState = s;
+    measure(); slideUntil = performance.now() + 400; apply(true);
+  };
   const refit = () => { measure(); if (!drag) apply(performance.now() < slideUntil); };
 
   // 指の動き(つまみと状態の帯の上だけ。中身のスクロールとぶつからないように)
   const onDown = (e) => {
     if (!enabled() || e.target.closest('button:not(.sheet-grip), select, input, a')) return;
     measure();
-    drag = { id: e.pointerId, y0: e.clientY, base: offsetFor(isOpen), moved: false, pts: [[e.clientY, performance.now()]] };
+    drag = { id: e.pointerId, y0: e.clientY, base: offsetFor(state), moved: false, pts: [[e.clientY, performance.now()]] };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
   };
   const onMove = (e) => {
@@ -82,17 +93,31 @@ function initSheet() {
     const dy = e.clientY - drag.y0;
     if (!drag.moved) { if (Math.abs(dy) < 6) return; drag.moved = true; side.style.transition = 'none'; }
     drag.pts.push([e.clientY, performance.now()]); if (drag.pts.length > 6) drag.pts.shift();
-    const y = Math.min(offsetFor(false), Math.max(0, drag.base + dy));
+    const y = Math.min(offsetFor('min'), Math.max(0, drag.base + dy));
     side.style.transform = `translateY(${y}px)`;
   };
   const onUp = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag; drag = null;
-    if (!d.moved) { if (e.currentTarget === grip) set(!isOpen); return; }   // つまみのタップで開閉
+    const list = states();
+    if (!d.moved) {   // つまみのタップ: 1段上へ。一番上なら、閉じる(撮影中は帯まで)
+      if (e.currentTarget !== grip) return;
+      const i = list.indexOf(state);
+      set(i < list.length - 1 ? list[i + 1] : (running ? closedState : 'min'));
+      return;
+    }
     const a = d.pts[0], b = d.pts[d.pts.length - 1];
     const v = (b[0] - a[0]) / Math.max(1, b[1] - a[1]);   // px/ms(上向きが負)
     const y = d.base + (e.clientY - d.y0);
-    set(Math.abs(v) > 0.3 ? v < 0 : y < offsetFor(false) / 2);
+    // 指を離した位置に一番近い段。はじいたときは、その向きの次の段
+    let near = list[0];
+    for (const s of list) if (Math.abs(offsetFor(s) - y) < Math.abs(offsetFor(near) - y)) near = s;
+    if (Math.abs(v) > 0.3) {
+      const up = v < 0;
+      const cand = list.filter((s) => (up ? offsetFor(s) < y - 1 : offsetFor(s) > y + 1));
+      if (cand.length) near = cand.reduce((p, s) => (Math.abs(offsetFor(s) - y) < Math.abs(offsetFor(p) - y) ? s : p));
+    }
+    set(near);
   };
   for (const el of [grip, peekEl]) {
     el.addEventListener('pointerdown', onDown);
@@ -107,10 +132,15 @@ function initSheet() {
   portrait.addEventListener('change', () => { measure(); apply(false); });
   measure(); apply(false);
   return {
-    open: () => set(true),
-    close: () => set(false),
-    /** 撮影の開始・停止。開始したら帯を下からせり上げ、停止したら下へしまう */
-    setRunning: (on) => { if (running === on) return; running = on; if (!on) isOpen = false; measure(); slideUntil = performance.now() + 400; apply(true); },
+    open: () => set('open'),
+    close: () => set(running ? closedState : 'min'),
+    /** 撮影の開始・停止。開始したら帯を下からせり上げ(最小化していたら、そのまま)、停止したら下へしまう */
+    setRunning: (on) => {
+      if (running === on) return;
+      running = on;
+      state = on ? closedState : 'min';
+      measure(); slideUntil = performance.now() + 400; apply(true);
+    },
   };
 }
 
@@ -133,6 +163,12 @@ function initRunState() {
   new MutationObserver(mirror).observe($('message'), { childList: true, characterData: true, subtree: true });
   new MutationObserver(() => $('startBtn').classList.toggle('loading', $('startBtn').disabled)).observe($('startBtn'), { attributes: true, attributeFilter: ['disabled'] });
   sync(); mirror();
+  // 最小化しているときに、つまみの横に出す状態(状態の表示を写す)
+  const gs = document.querySelector('.grip-state');
+  const copyState = () => { gs.innerHTML = `<span class="${$('stateDot').className}"></span>${$('stateLabel').textContent}`; };
+  new MutationObserver(copyState).observe($('stateLabel'), { childList: true, characterData: true, subtree: true });
+  new MutationObserver(copyState).observe($('stateDot'), { attributes: true, attributeFilter: ['class'] });
+  copyState();
 }
 
 // ---------------------------------------------------------------- 撮影の倍率(映像の上。iPhone のカメラと同じ操作)

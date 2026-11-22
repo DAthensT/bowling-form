@@ -261,6 +261,12 @@ button.loading::before { content: ''; width: 16px; height: 16px; border-radius: 
   /* iPhone のカメラと同じく、つまみは「︿」。開いているときは「﹀」 */
   .sheet-grip .chev { width: 12px; height: 12px; border: solid currentColor; border-width: 2.5px 0 0 2.5px; border-radius: 2px; transform: translateY(3px) rotate(45deg); transition: transform .25s var(--ease); }
   .side.sheet-open .sheet-grip .chev { transform: translateY(-3px) rotate(225deg); }
+  /* 最小化(撮影中、つまみだけ): つまみの横に、いまの状態を小さく出す */
+  .sheet-grip { gap: 10px; }
+  .grip-state { display: none; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, .85); }
+  .grip-state .dot { width: 8px; height: 8px; }
+  .side.sheet-min .grip-state { display: inline-flex; }
+  .zoom-ctl { transition: bottom .32s cubic-bezier(.2, .8, .2, 1); }
   .side .status-card { background: none; border: 0; padding: 2px 4px 10px; margin: 0; touch-action: none; }
   .side .status-card .live-actions { touch-action: manipulation; }
   .side > .card:not(.status-card), .side > details.card { background: rgba(255, 255, 255, .05); }
