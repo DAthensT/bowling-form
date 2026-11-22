@@ -236,7 +236,17 @@ function initZoom() {
     flush();
     if (!inflight && !busy && pending === null) { shown = camZ; range.value = String(camZ); render(); }
   }
-  const setShown = (z) => { shown = clampZ(z); render(); pending = quant(shown); flush(); };
+  // 指を動かしている間(busy)は、カメラの倍率は変えず、画面上の拡大だけで見せる。
+  // カメラの倍率を変えるたびに映像が一瞬切り替わり(Web では、その瞬間をコマに合わせられない)、段差になるため。
+  // 指を離したとき・指を止めて少したったときに、1回だけカメラへ送る
+  let idleTimer = 0;
+  const commit = () => { clearTimeout(idleTimer); pending = quant(shown); flush(); };
+  const setShown = (z) => {
+    shown = clampZ(z); render();
+    clearTimeout(idleTimer);
+    if (busy) idleTimer = setTimeout(commit, 300);
+    else commit();
+  };
 
   // ボタンのタップ: なめらかに切り替える
   let anim = 0;
@@ -247,7 +257,7 @@ function initZoom() {
     const stepF = (now) => {
       const k = Math.min(1, (now - t0) / DUR), e = 1 - Math.pow(1 - k, 3);
       setShown(from * Math.pow(to / from, e));   // 倍率の比で補間(見た目の拡大の速さが一定になる)
-      if (k < 1) anim = requestAnimationFrame(stepF); else busy = false;
+      if (k < 1) anim = requestAnimationFrame(stepF); else { busy = false; commit(); }
     };
     anim = requestAnimationFrame(stepF);
   }
@@ -281,7 +291,7 @@ function initZoom() {
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag; drag = null; busy = false;
     if (!d.moved && d.chip) animateTo(presets[Number(d.chip.dataset.i)]);
-    else hideDialSoon();
+    else { commit(); hideDialSoon(); }
   };
   for (const [el, onDial] of [[chipsEl, false], [dialEl, true]]) {
     el.addEventListener('pointerdown', startDrag(el, onDial));
@@ -306,7 +316,7 @@ function initZoom() {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch && pts.size === 2) setShown(pinch.z0 * dist() / Math.max(1, pinch.d0));
   });
-  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2 && pinch) { pinch = null; busy = false; hideDialSoon(); } };
+  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2 && pinch) { pinch = null; busy = false; commit(); hideDialSoon(); } };
   // 指を離した知らせは、どこで離しても受け取る(取りこぼすと、残った指で次の操作がピンチと誤認される)
   window.addEventListener('pointerup', up, true);
   window.addEventListener('pointercancel', up, true);
