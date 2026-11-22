@@ -540,12 +540,17 @@ const METHOD_TAG = { '3d': '3D', '2d': '2D', legacy: '2D旧' };
 
 async function renderHistory() {
   const list = $('historyList');
-  const items = await allThrows();
-  historyIds = items.map((r) => r.id);
-  local.onHistory(items);
-  if (!items.length) { list.innerHTML = '<p class="muted">まだ投球がありません</p>'; return; }
+  const all = await allThrows();
+  local.onHistory(all);
+  const nLiked = all.filter((r) => r.liked).length;
+  const likedOnly = settings.get('likedOnly', false) === true;
+  $('likedOnly').checked = likedOnly;
+  $('likedCount').textContent = nLiked ? `(${nLiked}件)` : '';
+  const items = likedOnly ? all.filter((r) => r.liked) : all;
+  historyIds = items.map((r) => r.id); // 絞り込み中は、連続再生もいいねした投球だけを順に送る
+  if (!items.length) { list.innerHTML = `<p class="muted">${all.length ? 'いいねした投球はまだありません' : 'まだ投球がありません'}</p>`; return; }
   list.innerHTML = items.map((r) =>
-    `<div class="item" data-id="${r.id}"><b>${new Date(r.date).toLocaleString('ja-JP')}${r.view === 'rear' ? '(後方)' : ''}${r.aiStatus === 'done' ? ' ✨' : ''}` +
+    `<div class="item" data-id="${r.id}"><b>${r.liked ? '<span class="liked">♥</span> ' : ''}${new Date(r.date).toLocaleString('ja-JP')}${r.view === 'rear' ? '(後方)' : ''}${r.aiStatus === 'done' ? ' ✨' : ''}` +
     `<span class="tag ${measurementMethod(r.report) === '3d' ? 'm3d' : ''}">${METHOD_TAG[measurementMethod(r.report)]}</span>` +
     `${local.tag(r)}</b>` +
     `<span>${esc(r.summary)}</span></div>`).join('');
@@ -615,6 +620,7 @@ async function openDetail(id) {
   const pos = historyIds.indexOf(r.id);
   $('detailPos').textContent = pos >= 0 ? `${pos + 1} / ${historyIds.length}` : '';
   $('detail').scrollTop = 0;
+  reflectDetailLike();
   local.onDetail(r);
   $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
   $('detailMetrics').innerHTML = r.report.metrics.map((m) =>
@@ -668,6 +674,23 @@ function closeDetail() {
 $('detailClose').addEventListener('click', closeDetail);
 
 // 縦スワイプの連続再生(YouTube ショートと同じ操作)。詳細の動画の ⛶ で開く。閉じると、そのとき見ていた投球の詳細に戻る
+/** いいねの保存。手元の記録は古いことがある(ほかの処理が更新した項目を消さない)ので、保存し直す直前に読み直す */
+async function setLiked(id, on) {
+  const r = await getThrow(id);
+  if (!r) return;
+  if (on) r.liked = true; else delete r.liked;
+  await putThrow(r);
+  if (openRecord && openRecord.id === id) { openRecord.liked = !!on; reflectDetailLike(); }
+}
+function reflectDetailLike() {
+  const on = !!(openRecord && openRecord.liked);
+  $('detailLike').classList.toggle('on', on);
+  $('detailLike').textContent = on ? '♥' : '♡';
+  $('detailLike').setAttribute('aria-pressed', String(on));
+}
+$('detailLike').addEventListener('click', () => { if (openRecord) setLiked(openRecord.id, !openRecord.liked); });
+$('likedOnly').addEventListener('change', () => { settings.set('likedOnly', $('likedOnly').checked); renderHistory(); });
+
 const shorts = createShorts({
   root: $('shorts'),
   getThrow,
@@ -679,6 +702,7 @@ const shorts = createShorts({
   }),
   getPose: () => $('detailPose').checked,
   setPose: (on) => { $('detailPose').checked = on; },
+  setLiked,
   onExit: (id) => openDetail(id),
 });
 $('fullBtn').addEventListener('click', () => {

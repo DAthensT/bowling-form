@@ -65,6 +65,7 @@
     <!-- 履歴 -->
     <section id="tab-history" class="tab">
       <h2>履歴</h2>
+      <label class="field check"><input type="checkbox" id="likedOnly"> ♥ いいねした投球だけ <span id="likedCount" class="muted"></span></label>
       <div id="historyList"></div>
     </section>
 
@@ -135,7 +136,7 @@
   <!-- 履歴の詳細 -->
   <div id="detail" hidden>
     <div class="detail-inner">
-      <div class="detail-bar"><button id="detailClose" class="small">← 戻る</button><b id="detailTitle"></b><span id="detailPos" class="muted"></span></div>
+      <div class="detail-bar"><button id="detailClose" class="small">← 戻る</button><b id="detailTitle"></b><button id="detailLike" class="small like" aria-pressed="false" aria-label="いいね">♡</button><span id="detailPos" class="muted"></span></div>
       <div id="detailStage"><video id="detailVideo" controls playsinline></video><canvas id="detailOverlay"></canvas>
         <button id="fullBtn" class="full-btn" aria-label="縦スワイプで連続再生">⛶</button></div>
       <p class="muted swipe-hint">⛶ で、ショート動画のように縦にスワイプして、投球を続けて見られます</p>
@@ -168,6 +169,8 @@
     <button class="sv-exit" aria-label="閉じる">‹ 詳細</button>
     <span class="sv-posn"></span>
     <button class="sv-pose" aria-label="骨格の表示を切り替える">骨格</button>
+    <button class="sv-like" aria-label="いいね" aria-pressed="false">♡</button>
+    <div class="sv-burst" aria-hidden="true">♥</div>
     <div class="sv-playicon" aria-hidden="true">▶</div>
     <div class="sv-info"><b class="sv-title"></b><span class="sv-sub"></span></div>
     <div class="sv-bar" role="slider" aria-label="再生位置"><div class="sv-track"><div class="sv-fill"></div></div></div>

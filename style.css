@@ -122,6 +122,14 @@ details summary { cursor: pointer; font-size: 13px; color: var(--muted); margin:
 .sv-playicon { position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(.8); font-size: 56px; opacity: 0;
   background: rgba(0,0,0,.35); width: 96px; height: 96px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   padding-left: 6px; box-sizing: border-box; pointer-events: none; transition: opacity .15s, transform .15s; }
+.sv-like { position: absolute; z-index: 3; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 70px); width: 52px; height: 52px; padding: 0 !important;
+  border-radius: 50% !important; font-size: 28px !important; line-height: 1; }
+.sv-like.on, .like.on, #historyList .liked { color: #ff3b5c !important; }
+.sv-burst { position: absolute; z-index: 2; left: 50%; top: 50%; font-size: 96px; color: #ff3b5c; opacity: 0; pointer-events: none;
+  transform: translate(-50%, -50%) scale(.4); text-shadow: 0 0 12px rgba(0,0,0,.4); }
+.sv-burst.go { animation: svburst .7s ease-out; }
+@keyframes svburst { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.4); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  60% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -60%) scale(1); } }
 #shorts.paused .sv-playicon { opacity: .9; transform: translate(-50%, -50%) scale(1); }
 /* 進行バー: 見た目は細く、触れる範囲は広く */
 .sv-bar { position: absolute; z-index: 4; left: 0; right: 0; bottom: env(safe-area-inset-bottom); height: 28px; display: flex; align-items: flex-end; cursor: pointer; }

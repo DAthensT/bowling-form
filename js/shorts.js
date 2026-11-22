@@ -9,14 +9,15 @@ const COMMIT_FRAC = 0.2;   // 画面の高さのこれだけ動かしたら次�
 const FLICK_SPEED = 0.35;  // px/ms。これ以上の速さではじいたら次へ
 const EDGE_RESIST = 0.3;   // 前後がない端での、指に付いてくる量
 
-export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, onExit }) {
+export function createShorts({ root, getThrow, getIds, draw, describe, getPose, setPose, setLiked, onExit }) {
   const q = (s) => root.querySelector(s);
   const stage = q('.sv-stage'), bar = q('.sv-bar'), fill = q('.sv-fill'), poseBtn = q('.sv-pose'), exitBtn = q('.sv-exit');
+  const likeBtn = q('.sv-like'), burst = q('.sv-burst');
   const titleEl = q('.sv-title'), subEl = q('.sv-sub'), posEl = q('.sv-posn');
   let ids = [], cur = 0, drag = 0, W = 0, H = 0;
   let isOpen = false, animating = false, raf = 0, wheelAt = 0;
   const cards = new Map();
-  let g = null, scrub = null;
+  let g = null, scrub = null, tapTimer = 0, lastTap = 0;
 
   const clamp01 = (x) => Math.min(1, Math.max(0, x));
   const curCard = () => cards.get(cur);
@@ -65,6 +66,27 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     c.el.remove(); cards.delete(c.i);
   }
   function play(c) { if (c && c.rec) c.v.play().catch(() => { /* 自動再生できなければ、一時停止の表示のまま。タップで再生 */ }); }
+  // ---- いいね(ボタン、または画面をダブルタップ)
+  function reflectLike() {
+    const c = curCard(), on = !!(c && c.rec && c.rec.liked);
+    likeBtn.classList.toggle('on', on);
+    likeBtn.textContent = on ? '♥' : '♡';
+    likeBtn.setAttribute('aria-pressed', String(on));
+  }
+  async function like(on) {
+    const c = curCard(); if (!c || !c.rec) return;
+    c.rec.liked = on; reflectLike();
+    if (on) { burst.classList.remove('go'); void burst.offsetWidth; burst.classList.add('go'); }
+    try { await setLiked(c.rec.id, on); } catch (e) { console.warn('like failed', e); c.rec.liked = !on; reflectLike(); }
+  }
+  likeBtn.addEventListener('click', () => { const c = curCard(); if (c && c.rec) like(!c.rec.liked); });
+  // 1回のタップは一時停止/再生。素早く2回タップしたら、いいね(一時停止はしない)
+  function onTap() {
+    const now = performance.now();
+    if (now - lastTap < 300) { clearTimeout(tapTimer); tapTimer = 0; lastTap = 0; like(true); return; }
+    lastTap = now;
+    tapTimer = setTimeout(() => { tapTimer = 0; togglePlay(); }, 280);
+  }
   function togglePlay() {
     const c = curCard(); if (!c || !c.rec) return;
     if (c.v.paused) play(c); else c.v.pause();
@@ -75,6 +97,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     posEl.textContent = `${cur + 1} / ${ids.length}`;
     const d = c && c.rec ? describe(c.rec) : { title: '', sub: '' };
     titleEl.textContent = d.title; subEl.textContent = d.sub;
+    reflectLike();
   }
   function settle() {
     animating = false;
@@ -91,6 +114,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     animating = true;
     const old = curCard();
     cur += dir; drag = 0;
+    clearTimeout(tapTimer); tapTimer = 0;
     try { next.v.currentTime = trimOf(next); } catch { /* ignore */ }
     play(next);
     updateInfo();
@@ -117,7 +141,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   const release = (e, cancelled) => {
     if (!g || e.pointerId !== g.id) return;
     const s = g; g = null;
-    if (!s.moved) { if (!cancelled) togglePlay(); return; }   // 動かさずに離した = タップ
+    if (!s.moved) { if (!cancelled) onTap(); return; }   // 動かさずに離した = タップ
     const now = performance.now();
     const recent = s.pts.filter((p) => now - p[1] < 120);
     const a = recent[0] || s.pts[0], b = s.pts[s.pts.length - 1];
@@ -211,6 +235,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   function close() {
     if (!isOpen) return;
     isOpen = false;
+    clearTimeout(tapTimer); tapTimer = 0;
     cancelAnimationFrame(raf);
     const id = ids[cur];
     for (const c of [...cards.values()]) destroyCard(c);
