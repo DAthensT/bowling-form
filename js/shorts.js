@@ -171,6 +171,8 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
     try { await setLiked(c.rec.id, on); } catch (e) { console.warn('like failed', e); c.rec.liked = !on; reflectLike(); }
   }
   likeBtn.addEventListener('click', () => { const c = curCard(); if (c && c.rec) like(!c.rec.liked); });
+  // 終わったら外す。残っていると、ビューアを閉じて再び開いたとき(表示し直したとき)に、アニメーションがもう一度再生される
+  burst.addEventListener('animationend', () => burst.classList.remove('go'));
   // 1回のタップは一時停止/再生。素早く2回タップしたら、いいね(一時停止はしない)
   function onTap() {
     const now = performance.now();
@@ -347,6 +349,7 @@ export function createShorts({ root, getThrow, getIds, draw, describe, getPose, 
   function close(after = onExit) {
     if (!isOpen) return;
     isOpen = false;
+    burst.classList.remove('go');
     clearTimeout(tapTimer); tapTimer = 0;
     cancelAnimationFrame(raf);
     const id = ids[cur];
