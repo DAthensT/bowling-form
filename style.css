@@ -284,7 +284,15 @@ button.loading::before { content: ''; width: 16px; height: 16px; border-radius: 
   background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--fg-2); font-size: 13.5px; font-weight: 600; transition: all .15s; }
 .chip-toggle input:checked + span { background: rgba(255, 55, 95, .16); border-color: rgba(255, 55, 95, .5); color: var(--like); }
 .chip-toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
-#likedCount { font-weight: 400; opacity: .8; }
+#likedCount, #missedCount { font-weight: 400; opacity: .8; }
+.page-head .chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.chip-toggle.miss input:checked + span { background: rgba(255, 159, 10, .16); border-color: rgba(255, 159, 10, .5); color: #ff9f0a; }
+#tab-history:has(#missedOnly:checked) .grid-note::before { background-image: none; content: '?'; display: grid; place-items: center; font-size: 30px; color: #ff9f0a; background-color: rgba(255, 159, 10, .14); }
+#tab-history:has(#missedOnly:checked) .grid-note::after { content: '投球として認識できなかった動きを、原因の調査用に残しています(設定 > 投球の認識)。'; }
+/* 未認識のマス: 印を付け、いいねは出さない */
+.cell-miss { position: absolute; z-index: 2; top: 6px; left: 6px; padding: 2px 7px; border-radius: 999px; background: rgba(255, 159, 10, .9); color: #000; font-size: 11px; font-weight: 800; }
+/* 未認識の詳細では、比較と AI の欄を出さない */
+#detail.is-missed .throw-only, #detail.is-missed #detailLike, #detail.is-missed #speakBtn { display: none; }
 #historyList { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin: 0 -12px; }
 #historyList .day-head, #historyList .grid-note { grid-column: 1 / -1; }
 #historyList .day-head { position: sticky; top: 0; z-index: 3; margin: 0; padding: 14px 12px 8px; font-size: 14px; font-weight: 700;

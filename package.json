@@ -1,5 +1,5 @@
 {
   "private": true,
   "type": "module",
-  "scripts": { "test": "node test/sim.mjs && node test/inbox.mjs && node test/power.mjs" }
+  "scripts": { "test": "node test/sim.mjs && node test/inbox.mjs && node test/power.mjs && node test/missed.mjs" }
 }

@@ -128,7 +128,10 @@
     <section id="tab-history" class="tab">
       <header class="page-head">
         <h2>履歴</h2>
-        <label class="chip-toggle"><input type="checkbox" id="likedOnly"><span>♥ いいね <span id="likedCount"></span></span></label>
+        <div class="chips">
+          <label class="chip-toggle"><input type="checkbox" id="likedOnly"><span>♥ いいね <span id="likedCount"></span></span></label>
+          <label class="chip-toggle miss" id="missedChip" hidden><input type="checkbox" id="missedOnly"><span>未認識 <span id="missedCount"></span></span></label>
+        </div>
       </header>
       <div id="historyList"></div>
     </section>
@@ -198,6 +201,12 @@
       </div>
       <p class="group-note">暗くしても、撮影・検知・録画は続きます(画面をタップすると戻ります)。録画を止めているあいだに、人が映ってすぐ投げ始めると、動画の頭(動き出しの前の部分)が短くなることがあります。気になるときは、録画を止める設定を外してください。</p>
 
+      <h3 class="group-title">投球の認識</h3>
+      <div class="group">
+        <label class="field check switch"><input type="checkbox" id="keepMissed"><span>認識できなかった動きも残す(原因の調査用)</span></label>
+      </div>
+      <p class="group-note">投球として認識できなかったときや、投球のような動きを検知が見逃したときにも、動画と理由を履歴の「未認識」に残します。残すのは新しい 20 件までで、それより古いものは自動で消します。</p>
+
       <h3 class="group-title">直したい点(重点項目)</h3>
       <div class="group">
         <div id="focusBox"></div>
@@ -258,11 +267,11 @@
         <h3 class="card-title">計測値</h3>
         <div id="detailMetrics"></div>
       </section>
-      <section class="card">
+      <section class="card throw-only">
         <h3 class="card-title">直近の投球との比較</h3>
         <div id="detailCmp"></div>
       </section>
-      <section class="card">
+      <section class="card throw-only">
         <h3 class="card-title"><svg class="ic"><use href="#i-spark"/></svg>AI分析 <span id="detailModel" class="muted"></span></h3>
         <p id="detailAi" class="pre"></p>
         <div class="actions"><button id="reAi" class="tonal">AIで再分析</button></div>

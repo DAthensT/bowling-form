@@ -1,5 +1,6 @@
 import { createPoseDetector, BONES } from './pose.js';
 import { ThrowDetector } from './detector.js';
+import { NearMissWatch, missDiag, overflowMissed } from './missed.js';
 import { ThrowRecorder } from './recorder.js';
 import { analyze, instant, summarize, measurementMethod } from './analyzer.js';
 import { FOCUS_OPTIONS, DEFAULT_FOCUS, focusItems, focusSummary, focusKeys } from './focus.js';
@@ -45,6 +46,10 @@ let openRecord = null;   // 履歴の詳細画面に表示中の投球
 let activePreset = null; // 使用中のお手本プリセット(現在の撮影位置と一致するもののみ)
 let presetsTab = null;
 let presence = new PresenceFilter();
+// 認識できなかった動きの調査用(js/missed.js)
+let sigLog = [];                     // 毎コマの動き量 {t, s, p(人物の姿勢が取れたか)}
+const nearMiss = new NearMissWatch();
+let missLock = null;                 // 見逃した動きを残すために、録画を確保しているあいだの情報
 
 // ---------------------------------------------------------------- settings / tabs
 
@@ -74,6 +79,7 @@ function initSettings() {
   bind('autoDim', 'autoDim', '60');
   bind('autoSleep', 'autoSleep', '300');
   bind('recGate', 'recGate', true, 'checked');
+  bind('keepMissed', 'keepMissed', true, 'checked');
   $('handLive').value = hand();
   $('handLive').addEventListener('change', () => { settings.set('hand', $('handLive').value); onSettingsChanged(); });
   bind('view', 'view', 'side');
@@ -183,6 +189,7 @@ async function startCamera() {
     detector = makeDetector();
     presence = new PresenceFilter();
     history = []; snaps = [];
+    sigLog = []; nearMiss.reset(); missLock = null;
     governor.reset(performance.now() / 1000);
     watch.reset(performance.now() / 1000);
     loopGen++;
@@ -326,6 +333,9 @@ function onFrame(raw, t) {
   const ev = detector.process(frame, t);
   if (ev && ev.type === 'started') onStarted(ev.at);
   else if (ev && ev.type === 'ended') onEnded(ev);
+  sigLog.push({ t, s: frame ? detector.signal : 0, p: !!frame });
+  if (sigLog.length > 3000) sigLog.splice(0, 1000);
+  watchNearMiss(t, !!frame);
 
   if (!dimmed && t - lastHud > 0.15) {
     lastHud = t;
@@ -440,6 +450,7 @@ function setState(s, text) {
 function setMessage(text) { $('message').textContent = text; syncDim(); }
 
 function onStarted(at) {
+  missLock = null;   // 見逃しとして確保していた録画は、この投球の録画として使う
   detectedStart = at;
   detectedEnd = null;
   const vs = recorder ? recorder.lock(at - PRE_ROLL) : null;
@@ -462,7 +473,12 @@ async function finishThrow(endAt) {
     const frames = history.filter((f) => f.t >= rec.videoStart && f.t <= endAt);
     const report = analyze({ frames, hand: hand(), throwStart: detectedStart, throwEnd: detectedEnd, view: detector.view, preset: activePreset });
     report.presetName = activePreset && !report.presetSkipped ? activePreset.name : '';
-    if (!report.isValidThrow) { setState('idle', '投球として認識できず破棄: ' + report.summary); return; }
+    if (!report.isValidThrow) {
+      if (!settings.get('keepMissed', true)) { setState('idle', '投球として認識できず破棄: ' + report.summary); return; }
+      await saveMissed(rec, { kind: 'rejected', reason: report.summary, from: detectedStart, to: endAt, endAt, report });
+      setState('idle', '投球として認識できませんでした: ' + report.summary + '(履歴の「未認識」に残しました)');
+      return;
+    }
 
     // 直近の投球(同じ撮影位置・利き手)との比較: 改善/悪化と推移の傾向
     const past = selectHistory(await allThrows(), { view: report.view, hand: hand(), method: report.method });
@@ -506,6 +522,58 @@ function compactPoses(frames, t0) {
   }));
 }
 
+// ---------------------------------------------------------------- 認識できなかった動き(原因の調査用。js/missed.js)
+
+const startThreshold = () => (detector.view === 'rear' ? detector.config.rearStartSlope : detector.config.startSpeed);
+
+/** 投球のような動きがあったのに、検知が開始に気づかなかった場面を拾って残す */
+function watchNearMiss(t, posed) {
+  if (!settings.get('keepMissed', true)) return;
+  const hit = nearMiss.update(t, detector.signal / startThreshold(), {
+    active: detector.isActive || state !== 'idle',
+    eligible: posed && !missLock && t >= detector.cooldownUntil,
+  });
+  if (!hit || !recorder) return;
+  const rcd = recorder;
+  if (rcd.lock(hit.from - PRE_ROLL) === null) return;
+  const m = missLock = hit;
+  setTimeout(async () => {
+    if (missLock !== m) return;   // そのあいだに投球が始まった(録画は投球の側で使う)
+    missLock = null;
+    try {
+      const rec = await rcd.finish();
+      if (!rec) return;
+      const pct = Math.round(m.peak * 100);
+      const reason = m.peak >= 1
+        ? `動き量が開始のしきい値を超えましたが、続いた時間が ${detector.config.startSustain} 秒に届かず、投球の開始と判断しませんでした。`
+        : `投球のような動きがありましたが、動き量が開始のしきい値の ${pct}% までで、届きませんでした。`;
+      await saveMissed(rec, { kind: 'notStarted', reason, from: m.from, to: m.to, endAt: m.to + POST_ROLL });
+    } catch (e) { console.warn('未認識の動きを保存できませんでした', e); }
+  }, POST_ROLL * 1000);
+}
+
+/** 認識できなかった動きを、動画・理由・動き量の推移と一緒に残す(新しい MISSED_MAX 件まで) */
+async function saveMissed(rec, { kind, reason, from, to, endAt, report }) {
+  const r2 = (v) => Math.round(v * 100) / 100, r3 = (v) => Math.round(v * 1000) / 1000;
+  const th = startThreshold();
+  const frames = history.filter((f) => f.t >= rec.videoStart && f.t <= endAt);
+  const record = {
+    id: crypto.randomUUID(), missed: true, missKind: kind, missReason: reason,
+    miss: { ...missDiag(sigLog, th, from, to), threshold: th, sens: sens() },
+    signals: sigLog.filter((x) => x.t >= rec.videoStart && x.t <= endAt).map((x) => [r2(x.t - rec.videoStart), r3(x.s), x.p ? 1 : 0]),
+    date: Date.now(), video: rec.blob, mime: rec.blob.type, videoStart: rec.videoStart,
+    trimStart: Math.max(0, from - PRE_ROLL - rec.videoStart),
+    hand: hand(), view: detector.view, presetName: '',
+    report: report || { isValidThrow: false, view: detector.view, metrics: [], startTime: from, backswingTime: 0, releaseTime: 0, endTime: to, summary: reason },
+    summary: reason, focusItems: [], comparison: null, keyframes: [],
+    poses: compactPoses(frames, rec.videoStart),
+    aiText: '', aiStatus: 'none', aiModel: ''
+  };
+  await putThrow(record);
+  for (const id of overflowMissed(await allThrows())) await removeThrow(id);
+  if ($('tab-history').classList.contains('active')) renderHistory();
+}
+
 function pickKeyframes(report) {
   const targets = [['動き出し', report.startTime], ['バックスイング頂点', report.backswingTime],
     ['リリース', report.releaseTime], ['フォロースルー', report.releaseTime + 0.35]];
@@ -521,6 +589,7 @@ function pickKeyframes(report) {
 // ---------------------------------------------------------------- AI
 
 async function runAI(record) {
+  if (record.missed) return;   // 未認識の記録は、分析しない
   const apiKey = settings.get('geminiKey', '');
   if (!apiKey) {
     record.aiStatus = 'failed';
@@ -639,7 +708,7 @@ async function makeThumb(r) {
     v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
     await once(v, 'loadedmetadata');
     const rel = r.report && r.report.releaseTime - r.videoStart;
-    let t = Number.isFinite(rel) ? rel : (r.trimStart || 0) + 0.5;
+    let t = Number.isFinite(rel) && !r.missed ? rel : (r.trimStart || 0) + (r.missed ? 1.5 : 0.5);
     if (Number.isFinite(v.duration)) t = Math.min(t, Math.max(0, v.duration - 0.05));
     v.currentTime = Math.max(0, t);
     await once(v, 'seeked');
@@ -693,17 +762,22 @@ async function renderHistory() {
   const list = $('historyList');
   await migrateLikes();
   const all = await allThrowsL();
-  local.onHistory(all);
+  const throws = all.filter((r) => !r.missed), missed = all.filter((r) => r.missed);   // 未認識(調査用)は、ふだんの一覧に混ぜない
+  local.onHistory(throws);
   const alive0 = new Set(all.map((r) => r.id));
   const lk = likes();
   if (Object.keys(lk).some((id) => !alive0.has(id))) settings.set('likes', Object.fromEntries(Object.entries(lk).filter(([id]) => alive0.has(id))));   // 消した投球の分は捨てる
-  const nLiked = all.filter((r) => r.liked).length;
-  const likedOnly = settings.get('likedOnly', false) === true;
+  const nLiked = throws.filter((r) => r.liked).length;
+  const missedOnly = settings.get('missedOnly', false) === true && missed.length > 0;
+  const likedOnly = !missedOnly && settings.get('likedOnly', false) === true;
   $('likedOnly').checked = likedOnly;
+  $('missedOnly').checked = missedOnly;
+  $('missedChip').hidden = !missed.length;
   $('likedCount').textContent = nLiked ? `(${nLiked}件)` : '';
-  const items = likedOnly ? all.filter((r) => r.liked) : all;
-  historyIds = items.map((r) => r.id); // 連続再生は、ここに出ている順(絞り込み中は、いいねした投球だけ)
-  if (!items.length) { list.innerHTML = `<p class="muted grid-note">${all.length ? 'いいねした投球はまだありません' : 'まだ投球がありません'}</p>`; return; }
+  $('missedCount').textContent = missed.length ? `(${missed.length}件)` : '';
+  const items = missedOnly ? missed : likedOnly ? throws.filter((r) => r.liked) : throws;
+  historyIds = items.map((r) => r.id); // 連続再生は、ここに出ている順(絞り込み中は、いいねした投球だけ / 未認識だけ)
+  if (!items.length) { list.innerHTML = `<p class="muted grid-note">${throws.length ? 'いいねした投球はまだありません' : 'まだ投球がありません'}</p>`; return; }
   const cache = thumbCache();
   const alive = new Set(all.map((r) => r.id));
   const stale = Object.keys(cache).filter((id) => !alive.has(id));
@@ -718,7 +792,8 @@ async function renderHistory() {
     html += `<div class="cell" data-id="${r.id}" role="button" tabindex="0">` +
       `<img alt="" ${th ? `src="${th}"` : ''}>` +
       `<span class="cell-time">${esc(timeLabel(r.date))}</span>` +
-      `<button class="cell-like${r.liked ? ' on' : ''}" aria-label="いいね" aria-pressed="${!!r.liked}">${r.liked ? '♥' : '♡'}</button></div>`;
+      (r.missed ? '<span class="cell-miss">未認識</span></div>'
+        : `<button class="cell-like${r.liked ? ' on' : ''}" aria-label="いいね" aria-pressed="${!!r.liked}">${r.liked ? '♥' : '♡'}</button></div>`);
   }
   list.innerHTML = html;
   fillThumbs(items);
@@ -782,7 +857,7 @@ function drawOverlay(cv, v, r) {
 let local = { tag: () => '', onHistory() {}, onDetail() {} };
 if (EDITION === 'local') {
   import('./local/index.js').then((mod) => {
-    local = mod.initLocal({ $, allThrows, putThrow, settings, getOpenRecord: () => openRecord, renderHistory });
+    local = mod.initLocal({ $, allThrows: async () => (await allThrows()).filter((r) => !r.missed), putThrow, settings, getOpenRecord: () => openRecord, renderHistory });
     renderHistory();
   }).catch((e) => console.error('ローカル版の機能を読み込めませんでした', e));
 }
@@ -805,7 +880,37 @@ async function openDetail(id, mini) {
   $('detail').scrollTop = 0;
   reflectDetailLike();
   local.onDetail(r);
-  $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
+  $('detailTitle').textContent = new Date(r.date).toLocaleString('ja-JP') + (r.view === 'rear' ? '(後方)' : '(側面)') + (r.missed ? ' / 未認識' : '') + (r.presetName ? ` / お手本: ${r.presetName}` : '');
+  $('detail').classList.toggle('is-missed', !!r.missed);
+  if (r.missed) renderMissedDetail(r);
+  else renderThrowDetail(r);
+  detailUrl = URL.createObjectURL(r.video);
+  const ext = (r.mime || '').includes('mp4') ? 'mp4' : 'webm';
+  $('dlBtn').href = detailUrl;
+  $('dlBtn').download = `throw-${new Date(r.date).toISOString().replace(/[:.]/g, '-')}.${ext}`;
+}
+
+const MISS_KIND = {
+  rejected: '検知は投球の開始と終了に気づきましたが、撮影後の分析で、投球ではないと判断しました。',
+  notStarted: '検知が、投球の開始に気づきませんでした。',
+};
+/** 未認識の記録: 理由と、原因を調べるための数値(動き量の最大・姿勢が取れた割合など) */
+function renderMissedDetail(r) {
+  const m = r.miss || {};
+  $('detailSummary').innerHTML = `<p><b>${esc(MISS_KIND[r.missKind] || '投球として認識できませんでした。')}</b></p><p>${esc(r.missReason || '')}</p>`;
+  const rows = [
+    ['動き量の最大', Number.isFinite(m.peak) ? `開始のしきい値の ${Math.round(m.peak * 100)}%` : '—'],
+    ['姿勢が取れたコマ', m.total ? `${m.posed} / ${m.total}(${Math.round((m.posed / m.total) * 100)}%)` : '—'],
+    ['姿勢が途切れた最長', Number.isFinite(m.longestGap) ? `${m.longestGap.toFixed(2)} 秒` : '—'],
+    ['感度', SENS_LABEL[m.sens] || '—'],
+  ];
+  $('detailMetrics').innerHTML = rows.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('') +
+    '<p class="muted">投球として認識できなかったため、フォームの計測値はありません。</p>';
+  $('detailCmp').innerHTML = '';
+  $('detailDiag').textContent = `種類: ${r.missKind} / 撮影位置: ${r.view === 'rear' ? '後方' : '側面'} / 開始のしきい値 ${m.threshold ?? '—'} / 動き量の記録 ${(r.signals || []).length} コマ`;
+}
+
+function renderThrowDetail(r) {
   $('detailMetrics').innerHTML = r.report.metrics.map((m) =>
     metricRow(m) + (m.advice ? `<p class="advice">${esc(m.advice)}</p>` : '')).join('');
   $('detailSummary').innerHTML = summaryHtml(r);
@@ -818,10 +923,6 @@ async function openDetail(id, mini) {
     ? ` / 解析に使えたフレーム ${d.samples}(補間 ${d.interpolated}) / リリース後 ${d.afterRelease}フレーム(${d.afterSpan.toFixed(2)}秒) → フォロースルー: ` +
       (d.followMeasured ? '測定できました' : '測れませんでした(リリース後の腕を十分に検出できていません)')
     : '(この記録には解析の詳細がありません)');
-  detailUrl = URL.createObjectURL(r.video);
-  const ext = (r.mime || '').includes('mp4') ? 'mp4' : 'webm';
-  $('dlBtn').href = detailUrl;
-  $('dlBtn').download = `throw-${new Date(r.date).toISOString().replace(/[:.]/g, '-')}.${ext}`;
 }
 
 function renderDetailAi() {
@@ -829,7 +930,7 @@ function renderDetailAi() {
   if (!r) return;
   $('detailModel').textContent = r.aiModel || '';
   $('detailAi').textContent = r.aiStatus === 'none' && !r.aiText ? '未実行' : r.aiText;
-  $('reAi').disabled = r.aiStatus === 'pending' || r.aiStatus === 'streaming';
+  $('reAi').disabled = !!r.missed || r.aiStatus === 'pending' || r.aiStatus === 'streaming';
 }
 
 /** 分析結果の画面を隠す(動画は、連続再生の側にある) */
@@ -866,7 +967,9 @@ function reflectDetailLike() {
   $('detailLike').setAttribute('aria-pressed', String(on));
 }
 $('detailLike').addEventListener('click', () => { if (openRecord) setLiked(openRecord.id, !openRecord.liked); });
-$('likedOnly').addEventListener('change', () => { settings.set('likedOnly', $('likedOnly').checked); renderHistory(); });
+// 絞り込み(いいね / 未認識)は、どちらか一方だけ
+$('likedOnly').addEventListener('change', () => { settings.set('likedOnly', $('likedOnly').checked); if ($('likedOnly').checked) settings.set('missedOnly', false); renderHistory(); });
+$('missedOnly').addEventListener('change', () => { settings.set('missedOnly', $('missedOnly').checked); if ($('missedOnly').checked) settings.set('likedOnly', false); renderHistory(); });
 
 const shorts = createShorts({
   root: $('shorts'),
@@ -875,7 +978,7 @@ const shorts = createShorts({
   draw: drawOverlay,
   describe: (r) => ({
     title: new Date(r.date).toLocaleString('ja-JP'),
-    sub: (r.view === 'rear' ? '後方' : '側面') + (r.presetName ? ` / お手本: ${r.presetName}` : ''),
+    sub: (r.view === 'rear' ? '後方' : '側面') + (r.missed ? ' / 未認識: ' + (r.missReason || '') : '') + (r.presetName ? ` / お手本: ${r.presetName}` : ''),
   }),
   getPose: () => $('detailPose').checked,
   setPose: (on) => { $('detailPose').checked = on; },
